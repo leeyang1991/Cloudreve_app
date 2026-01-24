@@ -3,36 +3,14 @@
 from cloudreve import CloudreveV4
 import argparse
 from tqdm import tqdm
-import os
 from pathlib import Path
 from mimetypes import guess_type
 import os
 import certifi
-
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
-
-login_info = open('~/.config/cloudreve/passwd', 'r')
-
-login_info = login_info.read().splitlines()
-BASE_URL = login_info[0]
-username = login_info[1]
-password = login_info[2]
-root_dir = '/_Transfer'
-chunk_size = int(1024*1024*2.5)
-
-
-def revise_file_path(file_path: str) -> str:
-    if not file_path.startswith('cloudreve://'):
-        if file_path[0] != '/':
-            file_path = '/' + file_path
-        file_path = 'cloudreve://my' + file_path
-
-    while file_path.endswith('//'):
-        file_path = file_path[:-1]
-
-    return file_path
-
 
 class my_CloudreveV4(CloudreveV4):
     def __init__(self,
@@ -40,11 +18,14 @@ class my_CloudreveV4(CloudreveV4):
                  proxy=None,
                  verify=True,
                  headers=None,
-                 cloudreve_session=None):
+                 cloudreve_session=None,
+                 chunk_size=int(1024 * 1024 * 2.5)
+                 ):
         super().__init__(base_url, proxy=None,
                  verify=True,
                  headers=None,
                  cloudreve_session=None)
+        self.chunk_size = chunk_size
 
     def upload(self, local_file_path, uri):
         '''
@@ -55,8 +36,22 @@ class my_CloudreveV4(CloudreveV4):
         local_file = Path(local_file_path)
         if not local_file.is_file():
             raise FileNotFoundError(f'{local_file_path} is not a file')
+        size = local_file.stat().st_size
 
-        uri = revise_file_path(uri)
+        njob = 5
+        self.max_workers = njob
+        # print(self.chunk_size)
+        # print(size)
+        # print(1024 * 1024 * 2.5 * njob)
+        # print('parallel upload')
+        # upload_func = self._upload_to_local_parallel
+        if size > 1024 * 1024 * 20:  # 20MB
+            upload_func = self._upload_to_local_parallel
+            print('parallel upload')
+        else:
+            upload_func = self._upload_to_local
+            print('serial upload')
+        uri = self.revise_file_path(uri)
         dir = uri[:uri.rfind('/')]
         policy = self.list(dir)['storage_policy']
         policy_id, policy_type = policy['id'], policy['type']
@@ -85,9 +80,9 @@ class my_CloudreveV4(CloudreveV4):
         elif policy_type == 'local' or policy_type == 'remote':
             # Local 或 Relay 模式
             del r['chunk_size']
-            return self._upload_to_local(
+            return upload_func(
                 local_file=local_file,
-                chunk_size=chunk_size,
+                chunk_size=self.chunk_size,
                 **r,
             )
         elif policy_type == 'onedrive':
@@ -98,7 +93,7 @@ class my_CloudreveV4(CloudreveV4):
         else:
             raise ValueError(f'存储策略 {policy_type} 暂时不受支持')
 
-    def _upload_to_local(self, local_file: Path, session_id, chunk_size=1024, **kwards):
+    def _upload_to_local(self, local_file, session_id, chunk_size, **kwards):
         total_size = local_file.stat().st_size
 
         with open(local_file, 'rb') as file, tqdm(
@@ -128,12 +123,74 @@ class my_CloudreveV4(CloudreveV4):
                 block_id += 1
                 pbar.update(len(chunk))
 
+    def _upload_to_local_parallel(
+            self,
+            local_file,
+            session_id,
+            chunk_size,
+            **kwards
+    ):
+        total_size = local_file.stat().st_size
+        lock = threading.Lock()
+
+        def upload_block(block_id, data):
+            self.request(
+                'post',
+                f'/file/upload/{session_id}/{block_id}',
+                headers={
+                    'Content-Length': str(len(data)),
+                    'Content-Type': 'application/octet-stream',
+                },
+                data=data,
+            )
+            with lock:
+                pbar.update(len(data))
+
+        MAX_INFLIGHT = self.max_workers * 2
+        with open(local_file, 'rb') as f, tqdm(
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+                desc=f'Uploading {local_file.name}',
+        ) as pbar, ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+
+            # futures = []
+            block_id = 0
+            futures = {}
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                future = executor.submit(upload_block, block_id, data)
+                futures[future] = block_id
+                block_id += 1
+
+                if len(futures) >= MAX_INFLIGHT:
+                    for done in as_completed(futures):
+                        done.result()  # 抛异常
+                        futures.pop(done)
+                        break
+            for future in as_completed(futures):
+                future.result()
+
     def get_url(self,remote_fname):
         data = self.get_info(remote_fname)
         source_link_str = self.get_source_url(remote_fname)
         return source_link_str
 
-class Utils:
+    def revise_file_path(self, file_path: str) -> str:
+        if not file_path.startswith('cloudreve://'):
+            if file_path[0] != '/':
+                file_path = '/' + file_path
+            file_path = 'cloudreve://my' + file_path
+
+        while file_path.endswith('//'):
+            file_path = file_path[:-1]
+
+        return file_path
+
+class Utils_cloudreve:
     def __init__(self,conn):
         self.conn = conn
 
@@ -169,21 +226,33 @@ class Utils:
             return False
 
 
-
 class Upload:
 
     def __init__(self):
+        BASE_URL, username, password = self.get_passwd()
         self.conn = my_CloudreveV4(BASE_URL)
         self.conn.login(username, password)
-        self.Util = Utils(self.conn)
+        self.Util = Utils_cloudreve(self.conn)
+        self.root_dir = '/_Transfer'
         pass
+
+    def get_passwd(self):
+        CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
+        login_info = open(CONFIG_FILE, 'r')
+
+        login_info = login_info.read().splitlines()
+        BASE_URL = login_info[0]
+        username = login_info[1]
+        password = login_info[2]
+
+        return BASE_URL, username, password
 
 
     def upload_f(self,local_f,remote_f=None):
 
         path_obj = Path(local_f)
         if remote_f is None:
-            remote_f = root_dir + '/' + str(path_obj.name)
+            remote_f = self.root_dir + '/' + str(path_obj.name)
 
         remote_f_obj = Path(remote_f)
         parent = str(remote_f_obj.parent)
@@ -216,7 +285,7 @@ class Upload:
     def upload_dir(self,local_d,remote_d=None):
         path_obj = Path(local_d)
         if remote_d is None:
-            remote_d = root_dir + '/' + str(path_obj.name)
+            remote_d = self.root_dir + '/' + str(path_obj.name)
         is_available = self.delete(remote_d)
         if not is_available:
             remote_d = remote_d + '(new)'
