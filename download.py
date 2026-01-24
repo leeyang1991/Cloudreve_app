@@ -15,7 +15,7 @@ password = login_info[2]
 conn = CloudreveV4(BASE_URL)
 conn.login(username, password)
 
-root_dir = '/rclone'
+root_dir = '/_Transfer'
 
 
 def get_url(remote_fname):
