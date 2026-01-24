@@ -5,8 +5,15 @@ from tqdm import tqdm
 import os
 from pprint import pprint
 from pathlib import Path
+import os
+import certifi
 
-login_info = open('cloudreve_passwd', 'r')
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
+login_info = open(CONFIG_FILE, 'r')
+
 login_info = login_info.read().splitlines()
 BASE_URL = login_info[0]
 username = login_info[1]
@@ -16,7 +23,6 @@ conn = CloudreveV4(BASE_URL)
 conn.login(username, password)
 
 root_dir = '/_Transfer'
-
 
 def get_url(remote_fname):
     data = conn.get_info(remote_fname)
@@ -114,21 +120,22 @@ def download(remote_path, outdir='./'):
         download_f(url, outf)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        prog="my_download",
-        description="Download file from Cloudreve"
-    )
-
-    parser.add_argument(
-        "remote_path",
-        help="Remote file path in Cloudreve (e.g. xx.mp3)"
-    )
-    parser.add_argument(
-        "local_path",
-        nargs="?",
-        default="./",
-        help="Local path (default: current directory)"
-    )
-
-    args = parser.parse_args()
-    download(args.remote_path, args.local_path)
+    # parser = argparse.ArgumentParser(
+    #     prog="my_download",
+    #     description="Download file from Cloudreve"
+    # )
+    #
+    # parser.add_argument(
+    #     "remote_path",
+    #     help="Remote file path in Cloudreve (e.g. xx.mp3)"
+    # )
+    # parser.add_argument(
+    #     "local_path",
+    #     nargs="?",
+    #     default="./",
+    #     help="Local path (default: current directory)"
+    # )
+    #
+    # args = parser.parse_args()
+    # download(args.remote_path, args.local_path)
+    download('US-Wkg.tif')

@@ -6,8 +6,14 @@ from tqdm import tqdm
 import os
 from pathlib import Path
 from mimetypes import guess_type
+import os
+import certifi
 
-login_info = open('cloudreve_passwd', 'r')
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+login_info = open('~/.config/cloudreve/passwd', 'r')
+
 login_info = login_info.read().splitlines()
 BASE_URL = login_info[0]
 username = login_info[1]
