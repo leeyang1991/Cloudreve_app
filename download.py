@@ -120,22 +120,21 @@ def download(remote_path, outdir='./'):
         download_f(url, outf)
 
 if __name__ == '__main__':
-    # parser = argparse.ArgumentParser(
-    #     prog="my_download",
-    #     description="Download file from Cloudreve"
-    # )
-    #
-    # parser.add_argument(
-    #     "remote_path",
-    #     help="Remote file path in Cloudreve (e.g. xx.mp3)"
-    # )
-    # parser.add_argument(
-    #     "local_path",
-    #     nargs="?",
-    #     default="./",
-    #     help="Local path (default: current directory)"
-    # )
-    #
-    # args = parser.parse_args()
-    # download(args.remote_path, args.local_path)
-    download('US-Wkg.tif')
+    parser = argparse.ArgumentParser(
+        prog="my_download",
+        description="Download file from Cloudreve"
+    )
+
+    parser.add_argument(
+        "remote_path",
+        help="Remote file path in Cloudreve (e.g. xx.mp3)"
+    )
+    parser.add_argument(
+        "local_path",
+        nargs="?",
+        default="./",
+        help="Local path (default: current directory)"
+    )
+
+    args = parser.parse_args()
+    download(args.remote_path, args.local_path)
