@@ -374,7 +374,7 @@ def main():
     parser.add_argument('path', help='Local file path')
     parser.add_argument('--nozip', action='store_false', help='disable zip')
     args = parser.parse_args()
-    upload(args.path, args.iszip)
+    upload(args.path, args.nozip)
 
 if __name__ == '__main__':
     main()
