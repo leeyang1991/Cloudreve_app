@@ -9,6 +9,8 @@ import os
 import certifi
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import zipfile
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
@@ -40,17 +42,12 @@ class my_CloudreveV4(CloudreveV4):
 
         njob = 5
         self.max_workers = njob
-        # print(self.chunk_size)
-        # print(size)
-        # print(1024 * 1024 * 2.5 * njob)
-        # print('parallel upload')
-        # upload_func = self._upload_to_local_parallel
         if size > 1024 * 1024 * 20:  # 20MB
             upload_func = self._upload_to_local_parallel
-            print('parallel upload')
+            # print('parallel upload')
         else:
             upload_func = self._upload_to_local
-            print('serial upload')
+            # print('serial upload')
         uri = self.revise_file_path(uri)
         dir = uri[:uri.rfind('/')]
         policy = self.list(dir)['storage_policy']
@@ -301,21 +298,83 @@ class Upload:
                 self.upload_f(local_f,remote_f)
         pass
 
-def upload(path):
-    Upload_obj = Upload()
-    if os.path.isdir(path):
-        Upload_obj.upload_dir(path)
-    elif os.path.isfile(path):
-        Upload_obj.upload_f(path)
+def zip_file(src: Path, dst: Path = None) -> Path:
+    """
+    压缩单个文件
+    :param src: 要压缩的文件路径
+    :param dst: 输出 zip 路径（可选，默认同目录）
+    :return: zip 文件路径
+    """
+    src = Path(src).resolve()
+    if not src.is_file():
+        raise ValueError(f"{src} is not a file")
+
+    if dst is None:
+        dst = src.with_suffix(src.suffix + ".zip")
     else:
-        raise Exception(f'{path} not exist')
+        dst = Path(dst).resolve()
+    print('Compressing',src.name)
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(src, arcname=src.name)
+
+    return dst
+
+
+def zip_dir(src_dir: Path, dst: Path = None) -> Path:
+    """
+    压缩整个文件夹（带进度条，按文件数）
+    """
+    src_dir = Path(src_dir).resolve()
+    if not src_dir.is_dir():
+        raise ValueError(f"{src_dir} is not a directory")
+
+    if dst is None:
+        dst = src_dir.with_suffix(".zip")
+    else:
+        dst = Path(dst).resolve()
+
+    files = [p for p in src_dir.rglob("*") if p.is_file()]
+
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf, tqdm(
+        total=len(files),
+        desc=f"Compressing {src_dir.name}",
+        unit="file",
+    ) as pbar:
+
+        for p in files:
+            zf.write(p, arcname=p.relative_to(src_dir.parent))
+            pbar.update(1)
+
+    return dst
+
+def upload(path,iszip=True):
+    Upload_obj = Upload()
+    if iszip:
+        path = Path(path)
+        if os.path.isdir(path):
+            dst = zip_dir(path)
+        elif os.path.isfile(path):
+            dst = zip_file(path)
+        else:
+            raise Exception(f'{path} not exist')
+        Upload_obj.upload_f(dst)
+        os.remove(dst)
+
+    else:
+        if os.path.isdir(path):
+            Upload_obj.upload_dir(path)
+        elif os.path.isfile(path):
+            Upload_obj.upload_f(path)
+        else:
+            raise Exception(f'{path} not exist')
     pass
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('path', help='Local file path')
+    parser.add_argument('--nozip', action='store_false', help='disable zip')
     args = parser.parse_args()
-    upload(args.path)
+    upload(args.path, args.iszip)
 
 if __name__ == '__main__':
     main()
