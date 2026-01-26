@@ -11,8 +11,53 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import zipfile
 
+import multiprocessing
+from multiprocessing.pool import ThreadPool as TPool
+import copyreg
+import types
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+
+class MULTIPROCESS:
+
+    def __init__(self, func, params):
+        self.func = func
+        self.params = params
+        copyreg.pickle(types.MethodType, self._pickle_method)
+        pass
+
+    def _pickle_method(self, m):
+        if m.__self__ is None:
+            return getattr, (m.__self__.__class__, m.__func__.__name__)
+        else:
+            return getattr, (m.__self__, m.__func__.__name__)
+
+    def run(self, process=4, process_or_thread='p', **kwargs):
+        '''
+        # 并行计算加进度条
+        :param func: input a kenel_function
+        :param params: para1,para2,para3... = params
+        :param process: number of cpu
+        :param thread_or_process: multi-thread or multi-process,'p' or 't'
+        :param kwargs: tqdm kwargs
+        :return:
+        '''
+
+        if process_or_thread == 'p':
+            pool = multiprocessing.Pool(process)
+        elif process_or_thread == 't':
+            pool = TPool(process)
+        else:
+            raise IOError('process_or_thread key error, input keyword such as "p" or "t"')
+
+        # results = list(tqdm(pool.imap(self.func, self.params), total=len(self.params), **kwargs))
+        results = pool.imap(self.func, self.params)
+        pool.close()
+        pool.join()
+        return results
+
 
 class my_CloudreveV4(CloudreveV4):
     def __init__(self,
@@ -21,13 +66,15 @@ class my_CloudreveV4(CloudreveV4):
                  verify=True,
                  headers=None,
                  cloudreve_session=None,
-                 chunk_size=int(1024 * 1024 * 2.5)
+                 chunk_size=int(1024 * 1024 * 25)
                  ):
         super().__init__(base_url, proxy=None,
                  verify=True,
                  headers=None,
                  cloudreve_session=None)
         self.chunk_size = chunk_size
+        self.max_workers = 5
+
 
     def upload(self, local_file_path, uri):
         '''
@@ -40,9 +87,7 @@ class my_CloudreveV4(CloudreveV4):
             raise FileNotFoundError(f'{local_file_path} is not a file')
         size = local_file.stat().st_size
 
-        njob = 5
-        self.max_workers = njob
-        if size > 1024 * 1024 * 20:  # 20MB
+        if size > 1024 * 1024 * 125:  # 20MB
             upload_func = self._upload_to_local_parallel
             # print('parallel upload')
         else:
@@ -120,7 +165,7 @@ class my_CloudreveV4(CloudreveV4):
                 block_id += 1
                 pbar.update(len(chunk))
 
-    def _upload_to_local_parallel(
+    def _upload_to_local_parallel1(
             self,
             local_file,
             session_id,
@@ -170,6 +215,54 @@ class my_CloudreveV4(CloudreveV4):
                         break
             for future in as_completed(futures):
                 future.result()
+
+    def _upload_to_local_parallel(
+            self,
+            local_file,
+            session_id,
+            chunk_size,
+            **kwards
+    ):
+        total_size = local_file.stat().st_size
+        njob = self.max_workers
+        sub_chunk_size = 1024 * 1024 * 1  # 1MB
+        with open(local_file, 'rb') as f, tqdm(
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+                desc=f'Uploading {local_file.name}',
+        ) as pbar:
+
+            block_id = 0
+            BATCH = njob * 2
+            params_list = []
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                params = block_id, data,session_id, pbar
+                block_id += 1
+                params_list.append(params)
+                if len(params_list) >= BATCH:
+                    MULTIPROCESS(self.kernel_upload_block,params_list).run(process=njob,process_or_thread='t')
+                    params_list = []
+            if len(params_list) > 0:
+                MULTIPROCESS(self.kernel_upload_block, params_list).run(process=len(params_list), process_or_thread='t')
+
+
+    def kernel_upload_block(self,params):
+        block_id, data,session_id,pbar = params
+        self.request(
+            'post',
+            f'/file/upload/{session_id}/{block_id}',
+            headers={
+                'Content-Length': str(len(data)),
+                'Content-Type': 'application/octet-stream',
+            },
+            data=data,
+        )
+        pbar.update(len(data))
 
     def get_url(self,remote_fname):
         data = self.get_info(remote_fname)
@@ -231,6 +324,7 @@ class Upload:
         self.conn.login(username, password)
         self.Util = Utils_cloudreve(self.conn)
         self.root_dir = '/_Transfer'
+        self.conn.create_dir(self.root_dir)
         pass
 
     def get_passwd(self):
@@ -288,6 +382,7 @@ class Upload:
             remote_d = remote_d + '(new)'
             self.upload_dir(local_d,remote_d)
         for root, dirs, files in os.walk(local_d):
+            files = sorted(files)
             for file in files:
                 if file.startswith('.'):
                     continue
@@ -348,7 +443,6 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
     return dst
 
 def upload(path,iszip=True):
-    Upload_obj = Upload()
     if iszip:
         path = Path(path)
         if os.path.isdir(path):
@@ -357,10 +451,12 @@ def upload(path,iszip=True):
             dst = zip_file(path)
         else:
             raise Exception(f'{path} not exist')
+        Upload_obj = Upload()
         Upload_obj.upload_f(dst)
         os.remove(dst)
 
     else:
+        Upload_obj = Upload()
         if os.path.isdir(path):
             Upload_obj.upload_dir(path)
         elif os.path.isfile(path):
