@@ -19,6 +19,7 @@ class Download:
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
         self.conn.login(username, password)
+        print('connected to',BASE_URL)
         pass
 
     def get_passwd(self):

@@ -225,13 +225,16 @@ class my_CloudreveV4(CloudreveV4):
     ):
         total_size = local_file.stat().st_size
         njob = self.max_workers
-        sub_chunk_size = 1024 * 1024 * 1  # 1MB
+        if len(local_file.name) > 36:
+            desc_name = local_file.name[:36] + '...'
+        else:
+            desc_name = local_file.name
         with open(local_file, 'rb') as f, tqdm(
                 total=total_size,
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                desc=f'Uploading {local_file.name}',
+                desc=f'Uploading {desc_name}',
         ) as pbar:
 
             block_id = 0
@@ -322,6 +325,7 @@ class Upload:
         BASE_URL, username, password = self.get_passwd()
         self.conn = my_CloudreveV4(BASE_URL)
         self.conn.login(username, password)
+        print('connected to', BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
         self.root_dir = '/_Transfer'
         self.conn.create_dir(self.root_dir)
@@ -339,25 +343,31 @@ class Upload:
         return BASE_URL, username, password
 
 
-    def upload_f(self,local_f,remote_f=None):
+    def upload_f(self,local_f,remote_f=None,overwrite=True):
 
         path_obj = Path(local_f)
         if remote_f is None:
             remote_f = self.root_dir + '/' + str(path_obj.name)
-
+        # print(remote_f)
         remote_f_obj = Path(remote_f)
         parent = str(remote_f_obj.parent)
         suffix = str(remote_f_obj.suffix)
         prefix = str(remote_f_obj.name.replace(suffix, ''))
-
-        is_available = self.delete(remote_f)
-
-        if not is_available:
-            remote_f = parent + '/' + prefix + '(new)' + suffix
-            print(remote_f)
-            self.upload_f(local_f,remote_f)
+        if overwrite:
+            is_available = self.delete(remote_f)
+            if not is_available:
+                remote_f = parent + '/' + prefix + '(new)' + suffix
+                print(remote_f)
+                self.upload_f(local_f,remote_f,overwrite)
+            else:
+                self.conn.upload(local_f,remote_f)
         else:
-            self.conn.upload(local_f,remote_f)
+            is_exist = self.Util.check_is_exists(remote_f)
+            if is_exist:
+                print(f'{remote_f} already exists')
+                return
+            else:
+                self.conn.upload(local_f,remote_f)
 
     def delete(self,remote_d):
         is_exist = self.Util.check_is_exists(remote_d)
@@ -373,24 +383,36 @@ class Upload:
     def mkdir(self,remote_d):
         self.conn.create_dir(remote_d)
 
-    def upload_dir(self,local_d,remote_d=None):
+    def upload_dir(self,local_d,remote_d=None,overwrite=True):
         path_obj = Path(local_d)
         if remote_d is None:
             remote_d = self.root_dir + '/' + str(path_obj.name)
-        is_available = self.delete(remote_d)
-        if not is_available:
-            remote_d = remote_d + '(new)'
-            self.upload_dir(local_d,remote_d)
-        for root, dirs, files in os.walk(local_d):
-            files = sorted(files)
-            for file in files:
-                if file.startswith('.'):
-                    continue
-                local_f = os.path.join(root, file)
-                remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
-                remote_f = remote_d_i + '/' + file
-                self.mkdir(remote_d_i)
-                self.upload_f(local_f,remote_f)
+        if overwrite:
+            is_available = self.delete(remote_d)
+            if not is_available:
+                remote_d = remote_d + '(new)'
+                self.upload_dir(local_d,remote_d,overwrite)
+            for root, dirs, files in os.walk(local_d):
+                files = sorted(files)
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+                    local_f = os.path.join(root, file)
+                    remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
+                    remote_f = remote_d_i + '/' + file
+                    self.mkdir(remote_d_i)
+                    self.upload_f(local_f,remote_f,overwrite)
+        else:
+            for root, dirs, files in os.walk(local_d):
+                files = sorted(files)
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+                    local_f = os.path.join(root, file)
+                    remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
+                    remote_f = remote_d_i + '/' + file
+                    self.mkdir(remote_d_i)
+                    self.upload_f(local_f,remote_f,overwrite)
         pass
 
 def zip_file(src: Path, dst: Path = None) -> Path:
@@ -442,7 +464,7 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
 
     return dst
 
-def upload(path,iszip=True):
+def upload(path,iszip=True,overwrite=True):
     if iszip:
         path = Path(path)
         if os.path.isdir(path):
@@ -452,15 +474,15 @@ def upload(path,iszip=True):
         else:
             raise Exception(f'{path} not exist')
         Upload_obj = Upload()
-        Upload_obj.upload_f(dst)
+        Upload_obj.upload_f(dst,overwrite=overwrite)
         os.remove(dst)
 
     else:
         Upload_obj = Upload()
         if os.path.isdir(path):
-            Upload_obj.upload_dir(path)
+            Upload_obj.upload_dir(path,overwrite=overwrite)
         elif os.path.isfile(path):
-            Upload_obj.upload_f(path)
+            Upload_obj.upload_f(path,overwrite=overwrite)
         else:
             raise Exception(f'{path} not exist')
     pass
@@ -469,8 +491,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('path', help='Local file path')
     parser.add_argument('--nozip', action='store_false', help='disable zip')
+    parser.add_argument('--no-overwrite', action='store_false', help='overwrite existing file')
     args = parser.parse_args()
-    upload(args.path, args.nozip)
+    upload(args.path, args.nozip,args.no_overwrite)
 
 if __name__ == '__main__':
     main()
