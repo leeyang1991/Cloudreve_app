@@ -7,14 +7,14 @@ from pathlib import Path
 from mimetypes import guess_type
 import os
 import certifi
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import zipfile
 
 import multiprocessing
 from multiprocessing.pool import ThreadPool as TPool
 import copyreg
 import types
+
+import math
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -66,17 +66,19 @@ class my_CloudreveV4(CloudreveV4):
                  verify=True,
                  headers=None,
                  cloudreve_session=None,
-                 chunk_size=int(1024 * 1024 * 25)
+                 chunk_size=int(1024 * 1024 * 25),
+                 memory=0.5
                  ):
-        super().__init__(base_url, proxy=None,
-                 verify=True,
-                 headers=None,
-                 cloudreve_session=None)
+        super().__init__(base_url, proxy=proxy,
+                 verify=verify,
+                 headers=headers,
+                 cloudreve_session=cloudreve_session)
         self.chunk_size = chunk_size
         self.max_workers = 5
+        self.memory=memory
 
 
-    def upload(self, local_file_path, uri):
+    def upload(self, local_file_path, uri, **kwargs):
         '''
         上传文件
         @param local_file_path: 本地文件路径
@@ -87,7 +89,7 @@ class my_CloudreveV4(CloudreveV4):
             raise FileNotFoundError(f'{local_file_path} is not a file')
         size = local_file.stat().st_size
 
-        if size > 1024 * 1024 * 125:  # 20MB
+        if size > 1024 * 1024 * 25:  # 25MB
             upload_func = self._upload_to_local_parallel
             # print('parallel upload')
         else:
@@ -122,28 +124,32 @@ class my_CloudreveV4(CloudreveV4):
         elif policy_type == 'local' or policy_type == 'remote':
             # Local 或 Relay 模式
             del r['chunk_size']
+            session_id = r['session_id']
             return upload_func(
                 local_file=local_file,
-                chunk_size=self.chunk_size,
-                **r,
-            )
-        elif policy_type == 'onedrive':
-            return self._upload_to_onedrive(
-                local_file=local_file,
-                **r,
+                chunk_size=self.chunk_size,session_id=session_id,
+                **kwargs
             )
         else:
             raise ValueError(f'存储策略 {policy_type} 暂时不受支持')
 
-    def _upload_to_local(self, local_file, session_id, chunk_size, **kwards):
+    def _upload_to_local(self, local_file, session_id, chunk_size, **kwargs):
         total_size = local_file.stat().st_size
 
+        if len(local_file.name) > 36:
+            desc_name = local_file.name[:36] + '...'
+        else:
+            desc_name = local_file.name
+        if 'desc_prefix' in kwargs:
+            desc_prefix = kwargs['desc_prefix'] + ' '
+        else:
+            desc_prefix = ''
         with open(local_file, 'rb') as file, tqdm(
                 total=total_size,
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                desc=f'Uploading {local_file.name}',
+                desc=f'{desc_prefix}Uploading {desc_name}',
         ) as pbar:
 
             block_id = 0
@@ -165,66 +171,74 @@ class my_CloudreveV4(CloudreveV4):
                 block_id += 1
                 pbar.update(len(chunk))
 
-    def _upload_to_local_parallel1(
-            self,
-            local_file,
-            session_id,
-            chunk_size,
-            **kwards
-    ):
-        total_size = local_file.stat().st_size
-        lock = threading.Lock()
-
-        def upload_block(block_id, data):
-            self.request(
-                'post',
-                f'/file/upload/{session_id}/{block_id}',
-                headers={
-                    'Content-Length': str(len(data)),
-                    'Content-Type': 'application/octet-stream',
-                },
-                data=data,
-            )
-            with lock:
-                pbar.update(len(data))
-
-        MAX_INFLIGHT = self.max_workers * 2
-        with open(local_file, 'rb') as f, tqdm(
-                total=total_size,
-                unit='B',
-                unit_scale=True,
-                unit_divisor=1024,
-                desc=f'Uploading {local_file.name}',
-        ) as pbar, ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-
-            # futures = []
-            block_id = 0
-            futures = {}
-            while True:
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                future = executor.submit(upload_block, block_id, data)
-                futures[future] = block_id
-                block_id += 1
-
-                if len(futures) >= MAX_INFLIGHT:
-                    for done in as_completed(futures):
-                        done.result()  # 抛异常
-                        futures.pop(done)
-                        break
-            for future in as_completed(futures):
-                future.result()
+    # def _upload_to_local_parallel1(
+    #         self,
+    #         local_file,
+    #         session_id,
+    #         chunk_size,
+    #         **kwargs
+    # ):
+    #     total_size = local_file.stat().st_size
+    #     lock = threading.Lock()
+    #
+    #     def upload_block(block_id, data):
+    #         self.request(
+    #             'post',
+    #             f'/file/upload/{session_id}/{block_id}',
+    #             headers={
+    #                 'Content-Length': str(len(data)),
+    #                 'Content-Type': 'application/octet-stream',
+    #             },
+    #             data=data,
+    #         )
+    #         with lock:
+    #             pbar.update(len(data))
+    #
+    #     MAX_INFLIGHT = self.max_workers * 2
+    #     with open(local_file, 'rb') as f, tqdm(
+    #             total=total_size,
+    #             unit='B',
+    #             unit_scale=True,
+    #             unit_divisor=1024,
+    #             desc=f'Uploading {local_file.name}',
+    #     ) as pbar, ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+    #
+    #         # futures = []
+    #         block_id = 0
+    #         futures = {}
+    #         while True:
+    #             data = f.read(chunk_size)
+    #             if not data:
+    #                 break
+    #             future = executor.submit(upload_block, block_id, data)
+    #             futures[future] = block_id
+    #             block_id += 1
+    #
+    #             if len(futures) >= MAX_INFLIGHT:
+    #                 for done in as_completed(futures):
+    #                     done.result()  # 抛异常
+    #                     futures.pop(done)
+    #                     break
+    #         for future in as_completed(futures):
+    #             future.result()
 
     def _upload_to_local_parallel(
             self,
             local_file,
             session_id,
             chunk_size,
-            **kwards
+            **kwargs
     ):
         total_size = local_file.stat().st_size
         njob = self.max_workers
+
+        if total_size / chunk_size < njob:
+            njob = int(math.ceil(total_size / chunk_size))
+
+        if 'desc_prefix' in kwargs:
+            desc_prefix = kwargs['desc_prefix'] + ' '
+        else:
+            desc_prefix = ''
         if len(local_file.name) > 36:
             desc_name = local_file.name[:36] + '...'
         else:
@@ -234,11 +248,14 @@ class my_CloudreveV4(CloudreveV4):
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                desc=f'Uploading {desc_name}',
+                desc= f'{desc_prefix}Uploading {desc_name}',
         ) as pbar:
+            # read file by index
+            # f.seek()
 
             block_id = 0
-            BATCH = njob * 2
+            # BATCH = njob * 8 # 1GB memory: 25(chunk_size) * 5(njob) * 8
+            BATCH = int(self.memory * 1024 * 1024 * 1024 / self.chunk_size)
             params_list = []
             while True:
                 data = f.read(chunk_size)
@@ -321,15 +338,20 @@ class Utils_cloudreve:
 
 class Upload:
 
-    def __init__(self):
-        BASE_URL, username, password = self.get_passwd()
-        self.conn = my_CloudreveV4(BASE_URL)
-        self.conn.login(username, password)
-        print('connected to', BASE_URL)
+    def __init__(self,memory):
+        self.BASE_URL, self.username, self.password = self.get_passwd()
+        self.conn = my_CloudreveV4(self.BASE_URL,memory=memory)
+        self.conn.login(self.username, self.password)
+        print('connected to', self.BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
         self.root_dir = '/_Transfer'
         self.conn.create_dir(self.root_dir)
+        self.memory = memory
         pass
+
+    def refresh_conn(self):
+        self.conn = my_CloudreveV4(self.BASE_URL,memory=self.memory)
+        self.conn.login(self.username, self.password)
 
     def get_passwd(self):
         CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
@@ -343,7 +365,7 @@ class Upload:
         return BASE_URL, username, password
 
 
-    def upload_f(self,local_f,remote_f=None,overwrite=True):
+    def upload_f(self,local_f,remote_f=None,overwrite=True,**kwargs):
 
         path_obj = Path(local_f)
         if remote_f is None:
@@ -360,14 +382,23 @@ class Upload:
                 print(remote_f)
                 self.upload_f(local_f,remote_f,overwrite)
             else:
-                self.conn.upload(local_f,remote_f)
+                self.refresh_conn()
+                self.conn.upload(local_f,remote_f,**kwargs)
         else:
+            if 'desc_prefix' in kwargs:
+                desc_prefix = kwargs['desc_prefix'] + ' '
+            else:
+                desc_prefix = ''
+
             is_exist = self.Util.check_is_exists(remote_f)
             if is_exist:
-                print(f'{remote_f} already exists')
+                if len(remote_f) > 36:
+                    remote_f = remote_f[:36] + '...'
+                print(f'{desc_prefix}{remote_f} already exists')
                 return
             else:
-                self.conn.upload(local_f,remote_f)
+                self.refresh_conn()
+                self.conn.upload(local_f,remote_f,**kwargs)
 
     def delete(self,remote_d):
         is_exist = self.Util.check_is_exists(remote_d)
@@ -387,33 +418,29 @@ class Upload:
         path_obj = Path(local_d)
         if remote_d is None:
             remote_d = self.root_dir + '/' + str(path_obj.name)
-        if overwrite:
-            is_available = self.delete(remote_d)
-            if not is_available:
-                remote_d = remote_d + '(new)'
-                self.upload_dir(local_d,remote_d,overwrite)
-            for root, dirs, files in os.walk(local_d):
-                files = sorted(files)
-                for file in files:
-                    if file.startswith('.'):
-                        continue
-                    local_f = os.path.join(root, file)
-                    remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
-                    remote_f = remote_d_i + '/' + file
-                    self.mkdir(remote_d_i)
-                    self.upload_f(local_f,remote_f,overwrite)
-        else:
-            for root, dirs, files in os.walk(local_d):
-                files = sorted(files)
-                for file in files:
-                    if file.startswith('.'):
-                        continue
-                    local_f = os.path.join(root, file)
-                    remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
-                    remote_f = remote_d_i + '/' + file
-                    self.mkdir(remote_d_i)
-                    self.upload_f(local_f,remote_f,overwrite)
-        pass
+
+        total_file = 0
+        for root, dirs, files in os.walk(local_d):
+            files = sorted(files)
+            for file in files:
+                if file.startswith('.'):
+                    continue
+                total_file += 1
+
+        flag = 0
+        for root, dirs, files in os.walk(local_d):
+            files = sorted(files)
+            for file in files:
+                if file.startswith('.'):
+                    continue
+                local_f = os.path.join(root, file)
+                remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
+                remote_f = remote_d_i + '/' + file
+                self.mkdir(remote_d_i)
+                flag += 1
+                desc_prefix = f'({flag}/{total_file})'
+                # print(desc_prefix)
+                self.upload_f(local_f,remote_f,overwrite,desc_prefix=desc_prefix)
 
 def zip_file(src: Path, dst: Path = None) -> Path:
     """
@@ -464,7 +491,7 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
 
     return dst
 
-def upload(path,iszip=True,overwrite=True):
+def upload(path,iszip=True,overwrite=True,memory=1):
     if iszip:
         path = Path(path)
         if os.path.isdir(path):
@@ -473,12 +500,12 @@ def upload(path,iszip=True,overwrite=True):
             dst = zip_file(path)
         else:
             raise Exception(f'{path} not exist')
-        Upload_obj = Upload()
+        Upload_obj = Upload(memory)
         Upload_obj.upload_f(dst,overwrite=overwrite)
         os.remove(dst)
 
     else:
-        Upload_obj = Upload()
+        Upload_obj = Upload(memory)
         if os.path.isdir(path):
             Upload_obj.upload_dir(path,overwrite=overwrite)
         elif os.path.isfile(path):
@@ -491,9 +518,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('path', help='Local file path')
     parser.add_argument('--nozip', action='store_false', help='disable zip')
-    parser.add_argument('--no-overwrite', action='store_false', help='overwrite existing file')
+    parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
+    parser.add_argument('--memory',type=float, default=0.5, help='set memory used during upload, default (0.5) GB')
     args = parser.parse_args()
-    upload(args.path, args.nozip,args.no_overwrite)
+    upload(args.path, args.nozip,args.no_overwrite, args.memory)
 
 if __name__ == '__main__':
     main()
