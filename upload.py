@@ -1,5 +1,3 @@
-## modify chunk_size in "Storage Policy"
-
 from cloudreve import CloudreveV4
 import argparse
 from tqdm import tqdm
@@ -67,16 +65,15 @@ class my_CloudreveV4(CloudreveV4):
                  headers=None,
                  cloudreve_session=None,
                  chunk_size=int(1024 * 1024 * 25),
-                 memory=0.5
+                 memory=0.2
                  ):
         super().__init__(base_url, proxy=proxy,
-                 verify=verify,
-                 headers=headers,
-                 cloudreve_session=cloudreve_session)
+                         verify=verify,
+                         headers=headers,
+                         cloudreve_session=cloudreve_session)
         self.chunk_size = chunk_size
-        self.max_workers = 5
-        self.memory=memory
-
+        self.max_workers = 8
+        self.memory = memory
 
     def upload(self, local_file_path, uri, **kwargs):
         '''
@@ -127,7 +124,7 @@ class my_CloudreveV4(CloudreveV4):
             session_id = r['session_id']
             return upload_func(
                 local_file=local_file,
-                chunk_size=self.chunk_size,session_id=session_id,
+                chunk_size=self.chunk_size, session_id=session_id,
                 **kwargs
             )
         else:
@@ -248,7 +245,7 @@ class my_CloudreveV4(CloudreveV4):
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                desc= f'{desc_prefix}Uploading {desc_name}',
+                desc=f'{desc_prefix}Uploading {desc_name}',
         ) as pbar:
             # read file by index
             # f.seek()
@@ -261,18 +258,25 @@ class my_CloudreveV4(CloudreveV4):
                 data = f.read(chunk_size)
                 if not data:
                     break
-                params = block_id, data,session_id, pbar
+                params = block_id, data, session_id, pbar
                 block_id += 1
                 params_list.append(params)
                 if len(params_list) >= BATCH:
-                    MULTIPROCESS(self.kernel_upload_block,params_list).run(process=njob,process_or_thread='t')
+                    MULTIPROCESS(self.kernel_upload_block, params_list).run(process=njob, process_or_thread='t')
                     params_list = []
-            if len(params_list) > 0:
-                MULTIPROCESS(self.kernel_upload_block, params_list).run(process=len(params_list), process_or_thread='t')
+            # if len(params_list) > 0:
+            #     MULTIPROCESS(self.kernel_upload_block, params_list).run(process=len(params_list), process_or_thread='t')
+            if len(params_list) >= 3:
+                params_list_new = params_list[:-1]
+                MULTIPROCESS(self.kernel_upload_block, params_list_new).run(process=len(params_list_new),
+                                                                            process_or_thread='t')
+                self.kernel_upload_block(params_list[-1])
+            else:
+                for params in params_list:
+                    self.kernel_upload_block(params)
 
-
-    def kernel_upload_block(self,params):
-        block_id, data,session_id,pbar = params
+    def kernel_upload_block(self, params):
+        block_id, data, session_id, pbar = params
         self.request(
             'post',
             f'/file/upload/{session_id}/{block_id}',
@@ -284,7 +288,7 @@ class my_CloudreveV4(CloudreveV4):
         )
         pbar.update(len(data))
 
-    def get_url(self,remote_fname):
+    def get_url(self, remote_fname):
         data = self.get_info(remote_fname)
         source_link_str = self.get_source_url(remote_fname)
         return source_link_str
@@ -300,11 +304,12 @@ class my_CloudreveV4(CloudreveV4):
 
         return file_path
 
+
 class Utils_cloudreve:
-    def __init__(self,conn):
+    def __init__(self, conn):
         self.conn = conn
 
-    def tree(self,remote_path):
+    def tree(self, remote_path):
         dir_info_dict = self.conn.list(remote_path)
         files_info_dict = dir_info_dict['files']
         path_list = []
@@ -321,14 +326,17 @@ class Utils_cloudreve:
                 raise Exception('unknown file type')
         return path_list
 
-    def check_is_file(self,remote_path):
+    def check_is_file(self, remote_path):
         info = self.conn.get_info(remote_path)
         f_type = info['type']
-        if f_type == 0: return True
-        elif f_type == 1: return False
-        else: raise Exception('unknown file type')
+        if f_type == 0:
+            return True
+        elif f_type == 1:
+            return False
+        else:
+            raise Exception('unknown file type')
 
-    def check_is_exists(self,remote_path):
+    def check_is_exists(self, remote_path):
         try:
             self.check_is_file(remote_path)
             return True
@@ -338,9 +346,9 @@ class Utils_cloudreve:
 
 class Upload:
 
-    def __init__(self,memory):
+    def __init__(self, memory):
         self.BASE_URL, self.username, self.password = self.get_passwd()
-        self.conn = my_CloudreveV4(self.BASE_URL,memory=memory)
+        self.conn = my_CloudreveV4(self.BASE_URL, memory=memory)
         self.conn.login(self.username, self.password)
         print('connected to', self.BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
@@ -350,7 +358,7 @@ class Upload:
         pass
 
     def refresh_conn(self):
-        self.conn = my_CloudreveV4(self.BASE_URL,memory=self.memory)
+        self.conn = my_CloudreveV4(self.BASE_URL, memory=self.memory)
         self.conn.login(self.username, self.password)
 
     def get_passwd(self):
@@ -364,8 +372,7 @@ class Upload:
 
         return BASE_URL, username, password
 
-
-    def upload_f(self,local_f,remote_f=None,overwrite=True,**kwargs):
+    def upload_f(self, local_f, remote_f=None, overwrite=True, **kwargs):
 
         path_obj = Path(local_f)
         if remote_f is None:
@@ -380,10 +387,10 @@ class Upload:
             if not is_available:
                 remote_f = parent + '/' + prefix + '(new)' + suffix
                 print(remote_f)
-                self.upload_f(local_f,remote_f,overwrite)
+                self.upload_f(local_f, remote_f, overwrite)
             else:
                 self.refresh_conn()
-                self.conn.upload(local_f,remote_f,**kwargs)
+                self.conn.upload(local_f, remote_f, **kwargs)
         else:
             if 'desc_prefix' in kwargs:
                 desc_prefix = kwargs['desc_prefix'] + ' '
@@ -398,9 +405,9 @@ class Upload:
                 return
             else:
                 self.refresh_conn()
-                self.conn.upload(local_f,remote_f,**kwargs)
+                self.conn.upload(local_f, remote_f, **kwargs)
 
-    def delete(self,remote_d):
+    def delete(self, remote_d):
         is_exist = self.Util.check_is_exists(remote_d)
         if is_exist:
             try:
@@ -411,10 +418,10 @@ class Upload:
         else:
             return True
 
-    def mkdir(self,remote_d):
+    def mkdir(self, remote_d):
         self.conn.create_dir(remote_d)
 
-    def upload_dir(self,local_d,remote_d=None,overwrite=True):
+    def upload_dir(self, local_d, remote_d=None, overwrite=True):
         path_obj = Path(local_d)
         if remote_d is None:
             remote_d = self.root_dir + '/' + str(path_obj.name)
@@ -434,13 +441,21 @@ class Upload:
                 if file.startswith('.'):
                     continue
                 local_f = os.path.join(root, file)
-                remote_d_i = remote_d + '/' + str(root.replace(local_d,''))
+                remote_d_i = remote_d + '/' + str(root.replace(local_d, ''))
                 remote_f = remote_d_i + '/' + file
                 self.mkdir(remote_d_i)
                 flag += 1
                 desc_prefix = f'({flag}/{total_file})'
                 # print(desc_prefix)
-                self.upload_f(local_f,remote_f,overwrite,desc_prefix=desc_prefix)
+                self.upload_f(local_f, remote_f, overwrite, desc_prefix=desc_prefix)
+
+
+def is_compressed_by_suffix(p: Path) -> bool:
+    COMPRESSED_SUFFIXES = {
+        ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar"
+    }
+    return any(s in COMPRESSED_SUFFIXES for s in p.suffixes)
+
 
 def zip_file(src: Path, dst: Path = None) -> Path:
     """
@@ -450,6 +465,10 @@ def zip_file(src: Path, dst: Path = None) -> Path:
     :return: zip 文件路径
     """
     src = Path(src).resolve()
+
+    if is_compressed_by_suffix(src):
+        return src
+
     if not src.is_file():
         raise ValueError(f"{src} is not a file")
 
@@ -457,7 +476,7 @@ def zip_file(src: Path, dst: Path = None) -> Path:
         dst = src.with_suffix(src.suffix + ".zip")
     else:
         dst = Path(dst).resolve()
-    print('Compressing',src.name)
+    print('Compressing', src.name)
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(src, arcname=src.name)
 
@@ -480,9 +499,9 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
     files = [p for p in src_dir.rglob("*") if p.is_file()]
 
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf, tqdm(
-        total=len(files),
-        desc=f"Compressing {src_dir.name}",
-        unit="file",
+            total=len(files),
+            desc=f"Compressing {src_dir.name}",
+            unit="file",
     ) as pbar:
 
         for p in files:
@@ -491,7 +510,8 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
 
     return dst
 
-def upload(path,iszip=True,overwrite=True,memory=1):
+
+def upload(path, iszip=True, overwrite=True, memory=1):
     if iszip:
         path = Path(path)
         if os.path.isdir(path):
@@ -501,27 +521,29 @@ def upload(path,iszip=True,overwrite=True,memory=1):
         else:
             raise Exception(f'{path} not exist')
         Upload_obj = Upload(memory)
-        Upload_obj.upload_f(dst,overwrite=overwrite)
+        Upload_obj.upload_f(dst, overwrite=overwrite)
         os.remove(dst)
 
     else:
         Upload_obj = Upload(memory)
         if os.path.isdir(path):
-            Upload_obj.upload_dir(path,overwrite=overwrite)
+            Upload_obj.upload_dir(path, overwrite=overwrite)
         elif os.path.isfile(path):
-            Upload_obj.upload_f(path,overwrite=overwrite)
+            Upload_obj.upload_f(path, overwrite=overwrite)
         else:
             raise Exception(f'{path} not exist')
     pass
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('path', help='Local file path')
     parser.add_argument('--nozip', action='store_false', help='disable zip')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
-    parser.add_argument('--memory',type=float, default=0.5, help='set memory used during upload, default (0.5) GB')
+    parser.add_argument('--memory', type=float, default=0.2, help='set memory used during upload, default (0.2) GB')
     args = parser.parse_args()
-    upload(args.path, args.nozip,args.no_overwrite, args.memory)
+    upload(args.path, args.nozip, args.no_overwrite, args.memory)
+
 
 if __name__ == '__main__':
     main()
