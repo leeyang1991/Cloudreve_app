@@ -65,7 +65,7 @@ class my_CloudreveV4(CloudreveV4):
                  headers=None,
                  cloudreve_session=None,
                  chunk_size=int(1024 * 1024 * 25),
-                 memory=0.2
+                 multi_task=None
                  ):
         super().__init__(base_url, proxy=proxy,
                          verify=verify,
@@ -73,7 +73,7 @@ class my_CloudreveV4(CloudreveV4):
                          cloudreve_session=cloudreve_session)
         self.chunk_size = chunk_size
         self.max_workers = 8
-        self.memory = memory
+        self.multi_task = multi_task
 
     def upload(self, local_file_path, uri, **kwargs):
         '''
@@ -86,12 +86,19 @@ class my_CloudreveV4(CloudreveV4):
             raise FileNotFoundError(f'{local_file_path} is not a file')
         size = local_file.stat().st_size
 
-        if size > 1024 * 1024 * 25:  # 25MB
+        if self.multi_task == None:
+            if size > 1024 * 1024 * 25:  # 25MB
+                upload_func = self._upload_to_local_parallel
+                # print('parallel upload')
+            else:
+                upload_func = self._upload_to_local
+        elif self.multi_task == True:
             upload_func = self._upload_to_local_parallel
-            # print('parallel upload')
-        else:
+        elif self.multi_task == False:
             upload_func = self._upload_to_local
-            # print('serial upload')
+        else:
+            raise 'multi_task should be True, False or None'
+
         uri = self.revise_file_path(uri)
         dir = uri[:uri.rfind('/')]
         policy = self.list(dir)['storage_policy']
@@ -168,56 +175,6 @@ class my_CloudreveV4(CloudreveV4):
                 block_id += 1
                 pbar.update(len(chunk))
 
-    # def _upload_to_local_parallel1(
-    #         self,
-    #         local_file,
-    #         session_id,
-    #         chunk_size,
-    #         **kwargs
-    # ):
-    #     total_size = local_file.stat().st_size
-    #     lock = threading.Lock()
-    #
-    #     def upload_block(block_id, data):
-    #         self.request(
-    #             'post',
-    #             f'/file/upload/{session_id}/{block_id}',
-    #             headers={
-    #                 'Content-Length': str(len(data)),
-    #                 'Content-Type': 'application/octet-stream',
-    #             },
-    #             data=data,
-    #         )
-    #         with lock:
-    #             pbar.update(len(data))
-    #
-    #     MAX_INFLIGHT = self.max_workers * 2
-    #     with open(local_file, 'rb') as f, tqdm(
-    #             total=total_size,
-    #             unit='B',
-    #             unit_scale=True,
-    #             unit_divisor=1024,
-    #             desc=f'Uploading {local_file.name}',
-    #     ) as pbar, ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-    #
-    #         # futures = []
-    #         block_id = 0
-    #         futures = {}
-    #         while True:
-    #             data = f.read(chunk_size)
-    #             if not data:
-    #                 break
-    #             future = executor.submit(upload_block, block_id, data)
-    #             futures[future] = block_id
-    #             block_id += 1
-    #
-    #             if len(futures) >= MAX_INFLIGHT:
-    #                 for done in as_completed(futures):
-    #                     done.result()  # 抛异常
-    #                     futures.pop(done)
-    #                     break
-    #         for future in as_completed(futures):
-    #             future.result()
 
     def _upload_to_local_parallel(
             self,
@@ -240,43 +197,31 @@ class my_CloudreveV4(CloudreveV4):
             desc_name = local_file.name[:36] + '...'
         else:
             desc_name = local_file.name
-        with open(local_file, 'rb') as f, tqdm(
+        with tqdm(
                 total=total_size,
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
                 desc=f'{desc_prefix}Uploading {desc_name}',
         ) as pbar:
-            # read file by index
-            # f.seek()
 
             block_id = 0
-            # BATCH = njob * 8 # 1GB memory: 25(chunk_size) * 5(njob) * 8
-            BATCH = int(self.memory * 1024 * 1024 * 1024 / self.chunk_size)
             params_list = []
             while True:
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                params = block_id, data, session_id, pbar
-                block_id += 1
+                # print(block_id * chunk_size)
+                params = block_id, session_id, pbar, local_file, chunk_size
                 params_list.append(params)
-                if len(params_list) >= BATCH:
-                    MULTIPROCESS(self.kernel_upload_block, params_list).run(process=njob, process_or_thread='t')
-                    params_list = []
-            # if len(params_list) > 0:
-            #     MULTIPROCESS(self.kernel_upload_block, params_list).run(process=len(params_list), process_or_thread='t')
-            if len(params_list) >= 3:
-                params_list_new = params_list[:-1]
-                MULTIPROCESS(self.kernel_upload_block, params_list_new).run(process=len(params_list_new),
-                                                                            process_or_thread='t')
-                self.kernel_upload_block(params_list[-1])
-            else:
-                for params in params_list:
-                    self.kernel_upload_block(params)
+                block_id += 1
+                if block_id * chunk_size >= total_size:
+                    break
+            MULTIPROCESS(self.kernel_upload_block,params_list[:-1]).run(process=njob,process_or_thread='t')
+            self.kernel_upload_block(params_list[-1])
 
     def kernel_upload_block(self, params):
-        block_id, data, session_id, pbar = params
+        block_id, session_id, pbar, local_file, chunk_size = params
+        f = open(local_file, 'rb')
+        f.seek(block_id * chunk_size)
+        data = f.read(chunk_size)
         self.request(
             'post',
             f'/file/upload/{session_id}/{block_id}',
@@ -287,6 +232,7 @@ class my_CloudreveV4(CloudreveV4):
             data=data,
         )
         pbar.update(len(data))
+
 
     def get_url(self, remote_fname):
         data = self.get_info(remote_fname)
@@ -346,19 +292,18 @@ class Utils_cloudreve:
 
 class Upload:
 
-    def __init__(self, memory):
+    def __init__(self,multi_task=None):
         self.BASE_URL, self.username, self.password = self.get_passwd()
-        self.conn = my_CloudreveV4(self.BASE_URL, memory=memory)
+        self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
         self.conn.login(self.username, self.password)
         print('connected to', self.BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
         self.root_dir = '/_Transfer'
         self.conn.create_dir(self.root_dir)
-        self.memory = memory
         pass
 
     def refresh_conn(self):
-        self.conn = my_CloudreveV4(self.BASE_URL, memory=self.memory)
+        self.conn = my_CloudreveV4(self.BASE_URL)
         self.conn.login(self.username, self.password)
 
     def get_passwd(self):
@@ -452,7 +397,7 @@ class Upload:
 
 def is_compressed_by_suffix(p: Path) -> bool:
     COMPRESSED_SUFFIXES = {
-        ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar"
+        ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar"
     }
     return any(s in COMPRESSED_SUFFIXES for s in p.suffixes)
 
@@ -511,7 +456,7 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
     return dst
 
 
-def upload(path, iszip=True, overwrite=True, memory=1):
+def upload(path, iszip=True, overwrite=True, multi_task=None):
     if iszip:
         path = Path(path)
         if os.path.isdir(path):
@@ -520,12 +465,13 @@ def upload(path, iszip=True, overwrite=True, memory=1):
             dst = zip_file(path)
         else:
             raise Exception(f'{path} not exist')
-        Upload_obj = Upload(memory)
+        Upload_obj = Upload(multi_task)
         Upload_obj.upload_f(dst, overwrite=overwrite)
-        os.remove(dst)
+        if not is_compressed_by_suffix(path):
+            os.remove(dst)
 
     else:
-        Upload_obj = Upload(memory)
+        Upload_obj = Upload(multi_task)
         if os.path.isdir(path):
             Upload_obj.upload_dir(path, overwrite=overwrite)
         elif os.path.isfile(path):
@@ -540,9 +486,9 @@ def main():
     parser.add_argument('path', help='Local file path')
     parser.add_argument('--nozip', action='store_false', help='disable zip')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
-    parser.add_argument('--memory', type=float, default=0.2, help='set memory used during upload, default (0.2) GB')
+    parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
     args = parser.parse_args()
-    upload(args.path, args.nozip, args.no_overwrite, args.memory)
+    upload(args.path, args.nozip, args.multi)
 
 
 if __name__ == '__main__':
