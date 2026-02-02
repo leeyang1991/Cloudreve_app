@@ -1,3 +1,5 @@
+import time
+
 from cloudreve import CloudreveV4
 import argparse
 from tqdm import tqdm
@@ -5,7 +7,6 @@ from pathlib import Path
 from mimetypes import guess_type
 import os
 import certifi
-import zipfile
 
 import multiprocessing
 from multiprocessing.pool import ThreadPool as TPool
@@ -13,6 +14,10 @@ import copyreg
 import types
 
 import math
+import zipfile
+import tarfile
+
+# from pprint import pprint
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -64,14 +69,12 @@ class my_CloudreveV4(CloudreveV4):
                  verify=True,
                  headers=None,
                  cloudreve_session=None,
-                 chunk_size=int(1024 * 1024 * 25),
                  multi_task=None
                  ):
         super().__init__(base_url, proxy=proxy,
                          verify=verify,
                          headers=headers,
                          cloudreve_session=cloudreve_session)
-        self.chunk_size = chunk_size
         self.max_workers = 8
         self.multi_task = multi_task
 
@@ -86,18 +89,6 @@ class my_CloudreveV4(CloudreveV4):
             raise FileNotFoundError(f'{local_file_path} is not a file')
         size = local_file.stat().st_size
 
-        if self.multi_task == None:
-            if size > 1024 * 1024 * 25:  # 25MB
-                upload_func = self._upload_to_local_parallel
-                # print('parallel upload')
-            else:
-                upload_func = self._upload_to_local
-        elif self.multi_task == True:
-            upload_func = self._upload_to_local_parallel
-        elif self.multi_task == False:
-            upload_func = self._upload_to_local
-        else:
-            raise 'multi_task should be True, False or None'
 
         uri = self.revise_file_path(uri)
         dir = uri[:uri.rfind('/')]
@@ -117,6 +108,20 @@ class my_CloudreveV4(CloudreveV4):
                              'policy_id': policy_id,
                              'mime_type': mime_type
                          })
+        self.chunk_size = r['chunk_size']
+
+        if self.multi_task == None:
+            if size > self.chunk_size:
+                upload_func = self._upload_to_local_parallel
+                # print('parallel upload')
+            else:
+                upload_func = self._upload_to_local
+        elif self.multi_task == True:
+            upload_func = self._upload_to_local_parallel
+        elif self.multi_task == False:
+            upload_func = self._upload_to_local
+        else:
+            raise 'multi_task should be True, False or None'
 
         if policy_type == 'remote' and r.get('upload_urls') and len(
                 r['upload_urls']) > 0:
@@ -127,7 +132,7 @@ class my_CloudreveV4(CloudreveV4):
             )
         elif policy_type == 'local' or policy_type == 'remote':
             # Local 或 Relay 模式
-            del r['chunk_size']
+            # del r['chunk_size']
             session_id = r['session_id']
             return upload_func(
                 local_file=local_file,
@@ -202,8 +207,16 @@ class my_CloudreveV4(CloudreveV4):
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                desc=f'{desc_prefix}Uploading {desc_name}',
+                desc=f'{desc_prefix}Uploading {desc_name}',smoothing=0.1
         ) as pbar:
+
+            block_id = 0
+            success_dict = {}
+            while True:
+                success_dict[block_id] = False
+                block_id += 1
+                if block_id * chunk_size >= total_size:
+                    break
 
             block_id = 0
             params_list = []
@@ -214,8 +227,18 @@ class my_CloudreveV4(CloudreveV4):
                 block_id += 1
                 if block_id * chunk_size >= total_size:
                     break
-            MULTIPROCESS(self.kernel_upload_block,params_list[:-1]).run(process=njob,process_or_thread='t')
-            self.kernel_upload_block(params_list[-1])
+
+            success_block_id_list = MULTIPROCESS(self.kernel_upload_block,params_list[:-1]).run(process=njob,process_or_thread='t')
+            time.sleep(0.5)
+
+            for block_id_i in success_block_id_list:
+                success_dict[block_id_i] = True
+
+            for block_id_i in success_dict:
+                success = success_dict[block_id_i]
+                if not success:
+                    self.kernel_upload_block(params_list[block_id_i])
+
 
     def kernel_upload_block(self, params):
         block_id, session_id, pbar, local_file, chunk_size = params
@@ -232,6 +255,7 @@ class my_CloudreveV4(CloudreveV4):
             data=data,
         )
         pbar.update(len(data))
+        return block_id
 
 
     def get_url(self, remote_fname):
@@ -386,7 +410,7 @@ class Upload:
                 if file.startswith('.'):
                     continue
                 local_f = os.path.join(root, file)
-                remote_d_i = remote_d + '/' + str(root.replace(local_d, ''))
+                remote_d_i = remote_d + '/' + str(root.replace(str(local_d), ''))
                 remote_f = remote_d_i + '/' + file
                 self.mkdir(remote_d_i)
                 flag += 1
@@ -456,9 +480,65 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
     return dst
 
 
-def upload(path, iszip=True, overwrite=True, multi_task=None):
+
+def zip_first_level(src_dir: Path, dst_dir: Path):
+    """
+    只压缩目录第一层：
+    - 文件 → 单文件 zip
+    - 子目录 → 整个目录 zip
+    """
+    src_dir = Path(src_dir).resolve()
+    if not src_dir.is_dir():
+        raise ValueError(f"{src_dir} is not a directory")
+
+    dst_dir = Path(dst_dir).resolve()
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    f_num = 0
+    for p in src_dir.iterdir():
+        f_num+=1
+    for p in tqdm(src_dir.iterdir(),desc='zip each file',total=f_num):
+        zip_path = dst_dir / (p.name + ".zip")
+
+        if p.is_file():
+            # 压缩单个文件
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(p, arcname=p.name)
+
+        elif p.is_dir():
+            # 压缩整个子目录
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for sub in p.rglob("*"):
+                    if sub.is_file():
+                        zf.write(sub, arcname=sub.relative_to(p.parent))
+    return dst_dir
+
+def tar_first_level(src_dir: Path, dst_dir: Path = None):
+    """
+    第一层：
+    - 文件 → file.tar
+    - 文件夹 → folder.tar
+    不做压缩（最快）
+    """
+    src_dir = Path(src_dir).resolve()
+    if not src_dir.is_dir():
+        raise ValueError(f"{src_dir} is not a directory")
+
+    dst_dir = Path(dst_dir).resolve()
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    f_num = 0
+    for p in src_dir.iterdir():
+        f_num += 1
+    for p in tqdm(src_dir.iterdir(),total=f_num,desc='tar each file'):
+        tar_path = dst_dir / (p.name + ".tar")
+
+        with tarfile.open(tar_path, mode="w") as tf:
+            tf.add(p, arcname=p.name)
+
+def upload(path, iszip=True, overwrite=True, multi_task=None, zip_each=False):
+    path = Path(path)
+
     if iszip:
-        path = Path(path)
         if os.path.isdir(path):
             dst = zip_dir(path)
         elif os.path.isfile(path):
@@ -471,10 +551,18 @@ def upload(path, iszip=True, overwrite=True, multi_task=None):
             os.remove(dst)
 
     else:
-        Upload_obj = Upload(multi_task)
         if os.path.isdir(path):
-            Upload_obj.upload_dir(path, overwrite=overwrite)
+            if zip_each:
+                zip_first_level_dir = path.parent / (str(path.name) + '_zip_each')
+                tar_first_level(path,zip_first_level_dir)
+                zip_first_level_dir = str(zip_first_level_dir)
+                Upload_obj = Upload(multi_task)
+                Upload_obj.upload_dir(zip_first_level_dir, overwrite=overwrite)
+            else:
+                Upload_obj = Upload(multi_task)
+                Upload_obj.upload_dir(path, overwrite=overwrite)
         elif os.path.isfile(path):
+            Upload_obj = Upload(multi_task)
             Upload_obj.upload_f(path, overwrite=overwrite)
         else:
             raise Exception(f'{path} not exist')
@@ -487,8 +575,14 @@ def main():
     parser.add_argument('--nozip', action='store_false', help='disable zip')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
+    parser.add_argument('--zip-each', action='store_true', help='zip each file')
     args = parser.parse_args()
-    upload(args.path, args.nozip, args.multi)
+
+    upload(args.path,
+           iszip=args.nozip,
+           overwrite=args.no_overwrite,
+           multi_task=args.multi,
+           zip_each=args.zip_each)
 
 
 if __name__ == '__main__':
