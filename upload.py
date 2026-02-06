@@ -38,15 +38,6 @@ class MULTIPROCESS:
             return getattr, (m.__self__, m.__func__.__name__)
 
     def run(self, process=4, process_or_thread='p', **kwargs):
-        '''
-        # 并行计算加进度条
-        :param func: input a kenel_function
-        :param params: para1,para2,para3... = params
-        :param process: number of cpu
-        :param thread_or_process: multi-thread or multi-process,'p' or 't'
-        :param kwargs: tqdm kwargs
-        :return:
-        '''
 
         if process_or_thread == 'p':
             pool = multiprocessing.Pool(process)
@@ -55,7 +46,6 @@ class MULTIPROCESS:
         else:
             raise IOError('process_or_thread key error, input keyword such as "p" or "t"')
 
-        # results = list(tqdm(pool.imap(self.func, self.params), total=len(self.params), **kwargs))
         results = pool.imap(self.func, self.params)
         pool.close()
         pool.join()
@@ -234,7 +224,7 @@ class my_CloudreveV4(CloudreveV4):
             for block_id_i in success_block_id_list:
                 success_dict[block_id_i] = True
 
-            for block_id_i in success_dict:
+            for block_id_i in sorted(success_dict.keys()):
                 success = success_dict[block_id_i]
                 if not success:
                     self.kernel_upload_block(params_list[block_id_i])
@@ -539,15 +529,21 @@ def upload(path, iszip=True, overwrite=True, multi_task=None, zip_each=False):
     path = Path(path)
 
     if iszip:
+        del_flag = True
         if os.path.isdir(path):
             dst = zip_dir(path)
         elif os.path.isfile(path):
-            dst = zip_file(path)
+            src_size = path.stat().st_size / 1024 / 1024
+            if src_size < 50:
+                del_flag = False
+                dst = path
+            else:
+                dst = zip_file(path)
         else:
             raise Exception(f'{path} not exist')
         Upload_obj = Upload(multi_task)
         Upload_obj.upload_f(dst, overwrite=overwrite)
-        if not is_compressed_by_suffix(path):
+        if del_flag:
             os.remove(dst)
 
     else:

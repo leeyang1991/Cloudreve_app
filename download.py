@@ -115,6 +115,7 @@ class Download:
         else: raise Exception('unknown file type')
 
     def download(self, remote_path, outdir='./'):
+        # todo: bug in download dir on Windows
         remote_path = self.root_dir + '/' + remote_path
         if self.check_is_file(remote_path):
             path_list = [remote_path]
@@ -132,7 +133,7 @@ class Download:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        prog="my_download",
+        prog="download",
         description="Download file from Cloudreve"
     )
 
