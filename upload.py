@@ -407,6 +407,7 @@ class Upload:
                 desc_prefix = f'({flag}/{total_file})'
                 # print(desc_prefix)
                 self.upload_f(local_f, remote_f, overwrite, desc_prefix=desc_prefix)
+                self.refresh_conn()
 
 
 def is_compressed_by_suffix(p: Path) -> bool:
@@ -525,56 +526,62 @@ def tar_first_level(src_dir: Path, dst_dir: Path = None):
         with tarfile.open(tar_path, mode="w") as tf:
             tf.add(p, arcname=p.name)
 
-def upload(path, iszip=True, overwrite=True, multi_task=None, zip_each=False):
-    path = Path(path)
+def upload(*path_list, iszip=True, overwrite=True, multi_task=None, zip_each=False):
+    total_len = len(path_list)
+    flag = 0
+    Upload_obj = Upload(multi_task)
 
-    if iszip:
-        del_flag = True
-        if os.path.isdir(path):
-            dst = zip_dir(path)
-        elif os.path.isfile(path):
-            src_size = path.stat().st_size / 1024 / 1024
-            if src_size < 50:
-                del_flag = False
-                dst = path
+    for path in path_list:
+        if '*' in path or '?' in path:
+            raise FileNotFoundError(f'No files matched: {path}')
+        flag += 1
+        desc_prefix = f'[{flag}/{total_len}]'
+        if total_len == 1:
+            desc_prefix = ''
+        path = Path(path)
+        if iszip:
+            del_flag = True
+            if os.path.isdir(path):
+                dst = zip_dir(path)
+            elif os.path.isfile(path):
+                src_size = path.stat().st_size / 1024 / 1024
+                if src_size < 50:
+                    del_flag = False
+                    dst = path
+                else:
+                    dst = zip_file(path)
             else:
-                dst = zip_file(path)
-        else:
-            raise Exception(f'{path} not exist')
-        Upload_obj = Upload(multi_task)
-        Upload_obj.upload_f(dst, overwrite=overwrite)
-        if del_flag:
-            os.remove(dst)
+                raise Exception(f'{path} not exist')
+            Upload_obj.upload_f(dst, overwrite=overwrite,desc_prefix=desc_prefix)
+            if del_flag:
+                os.remove(dst)
 
-    else:
-        if os.path.isdir(path):
-            if zip_each:
-                zip_first_level_dir = path.parent / (str(path.name) + '_zip_each')
-                tar_first_level(path,zip_first_level_dir)
-                zip_first_level_dir = str(zip_first_level_dir)
-                Upload_obj = Upload(multi_task)
-                Upload_obj.upload_dir(zip_first_level_dir, overwrite=overwrite)
-            else:
-                Upload_obj = Upload(multi_task)
-                Upload_obj.upload_dir(path, overwrite=overwrite)
-        elif os.path.isfile(path):
-            Upload_obj = Upload(multi_task)
-            Upload_obj.upload_f(path, overwrite=overwrite)
         else:
-            raise Exception(f'{path} not exist')
-    pass
+            if os.path.isdir(path):
+                if zip_each:
+                    zip_first_level_dir = path.parent / (str(path.name) + '_zip_each')
+                    tar_first_level(path,zip_first_level_dir)
+                    zip_first_level_dir = str(zip_first_level_dir)
+                    Upload_obj.upload_dir(zip_first_level_dir, overwrite=overwrite)
+                else:
+                    Upload_obj.upload_dir(path, overwrite=overwrite)
+            elif os.path.isfile(path):
+                Upload_obj.upload_f(path, overwrite=overwrite,desc_prefix=desc_prefix)
+            else:
+                raise Exception(f'{path} not exist')
+        pass
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('path', help='Local file path')
-    parser.add_argument('--nozip', action='store_false', help='disable zip')
+    parser.add_argument('path', nargs='+', help='Local file/folder path, multiple files/folders')
+    parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 50MB, zip will be skipped')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
-    parser.add_argument('--zip-each', action='store_true', help='zip each file')
+    parser.add_argument('--zip-each', action='store_true', help='tar each file in the folder respectively')
     args = parser.parse_args()
 
-    upload(args.path,
+    upload(*args.path,
            iszip=args.nozip,
            overwrite=args.no_overwrite,
            multi_task=args.multi,
