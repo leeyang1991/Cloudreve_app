@@ -6,6 +6,8 @@ from pprint import pprint
 from pathlib import Path
 import os
 import certifi
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -33,14 +35,13 @@ class Download:
 
         return BASE_URL, username, password
 
-        pass
 
     def get_url(self, remote_fname):
         data = self.conn.get_info(remote_fname)
         source_link_str = self.conn.get_source_url(remote_fname)
         return source_link_str
 
-    def download_f(self, url, outf, chunk_size=1024 * 64, quiet=False):
+    def download_f_single(self, url, outf, chunk_size=1024 * 64, quiet=False):
         http = urllib3.PoolManager()
         r = http.request(
             "GET",
@@ -50,33 +51,85 @@ class Download:
 
         total_size = int(r.headers.get("Content-Length", 0))
 
-        if quiet == True:
+        with open(outf, "wb") as f, tqdm(
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            desc="Downloading",
+            smoothing=0.1
+        ) as pbar:
+
+            while True:
+                chunk = r.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                pbar.update(len(chunk))
+
+        r.release_conn()
+
+    def download_f_parallel(
+            self,
+            url,
+            outf,
+            chunk_size=5 * 1024 * 1024,  # 每个 range 块大小（5MB）
+            max_workers=8,
+            quiet=False
+    ):
+        http = urllib3.PoolManager()
+        r = http.request(
+            "GET",
+            url,
+            preload_content=False
+        )
+
+        total_size = int(r.headers.get("Content-Length", 0))
+
+        # with open(outf, "wb") as f: # pre-allocate disk space
+        #     f.truncate(total_size)
+
+        lock = threading.Lock()
+
+        def download_range(start, end, pbar):
+            headers = {"Range": f"bytes={start}-{end}"}
+            r = http.request("GET", url, headers=headers, preload_content=False)
             with open(outf, "wb") as f:
-
+                f.seek(start)
                 while True:
-                    chunk = r.read(chunk_size)
-                    if not chunk:
+                    data = r.read(1024 * 64)
+                    if not data:
                         break
-                    f.write(chunk)
+                    f.write(data)
+                    with lock:
+                        pbar.update(len(data))
+                        pbar.refresh()
             r.release_conn()
-        else:
 
-            with open(outf, "wb") as f, tqdm(
+        # 生成 ranges
+        ranges = []
+        for start in range(0, total_size, chunk_size):
+            end = min(start + chunk_size - 1, total_size - 1)
+            ranges.append((start, end))
+
+        with tqdm(
                 total=total_size,
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
                 desc="Downloading",
-            ) as pbar:
+                disable=quiet,
+                smoothing=0.1,
+                mininterval=0.1
+        ) as pbar, ThreadPoolExecutor(max_workers=max_workers) as executor:
 
-                while True:
-                    chunk = r.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    pbar.update(len(chunk))
+            futures = [
+                executor.submit(download_range, s, e, pbar)
+                for s, e in ranges
+            ]
 
-            r.release_conn()
+            for f in as_completed(futures):
+                f.result()
 
     def tree(self, remote_path):
         dir_info_dict = self.conn.list(remote_path)
@@ -114,24 +167,25 @@ class Download:
         elif f_type == 1: return False
         else: raise Exception('unknown file type')
 
-    def download(self, remote_path, outdir='./'):
-        # todo: bug in download dir on Windows
+    def download(self, remote_path, outdir:str=None):
+        if outdir == None:
+            outdir = os.getcwd()
+        outdir = Path(outdir)
         remote_path = self.root_dir + '/' + remote_path
         if self.check_is_file(remote_path):
             path_list = [remote_path]
         else:
             path_list = self.tree(remote_path)
-        for path in path_list:
-            path_obj = Path(path)
-            parent_dir = outdir + str(path_obj.parent).replace(self.root_dir,'')
-            if not os.path.exists(parent_dir):
-                os.makedirs(parent_dir)
+        for path_remote in path_list:
+            path_local = path_remote.replace(self.root_dir+'/', '')
+            outf = outdir / path_local
+            parent_dir = outf.parent
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            url = self.get_url(path_remote)
+            self.download_f_parallel(url, outf)
+            # self.download_f1(url, outf)
 
-            url = self.get_url(path)
-            outf = f"{outdir}/{path.replace(self.root_dir,'')}"
-            self.download_f(url, outf)
-
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(
         prog="download",
         description="Download file from Cloudreve"
@@ -150,3 +204,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     Download().download(args.remote_path, args.local_path)
+    pass
+
+if __name__ == '__main__':
+    main()
