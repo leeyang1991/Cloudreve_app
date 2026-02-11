@@ -7,17 +7,56 @@ from pathlib import Path
 import os
 import certifi
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import multiprocessing
+from multiprocessing.pool import ThreadPool as TPool
+import copyreg
+import types
+
+
+stop_event = threading.Event()
+
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
+class MULTIPROCESS:
+
+    def __init__(self, func, params):
+        self.func = func
+        self.params = params
+        copyreg.pickle(types.MethodType, self._pickle_method)
+        pass
+
+    def _pickle_method(self, m):
+        if m.__self__ is None:
+            return getattr, (m.__self__.__class__, m.__func__.__name__)
+        else:
+            return getattr, (m.__self__, m.__func__.__name__)
+
+    def run(self, process=4, process_or_thread='p', **kwargs):
+
+        if process_or_thread == 'p':
+            pool = multiprocessing.Pool(process)
+        elif process_or_thread == 't':
+            pool = TPool(process)
+        else:
+            raise IOError('process_or_thread key error, input keyword such as "p" or "t"')
+
+        results = pool.imap(self.func, self.params)
+        pool.close()
+        pool.join()
+        return results
+
 
 class Download:
 
-    def __init__(self):
+    def __init__(self, config_file=None):
         self.root_dir = '/_Transfer'
-
+        if config_file is not None:
+            self.config_file = Path.home() / ".config" / "cloudreve" / config_file
+        else:
+            self.config_file = Path.home() / ".config" / "cloudreve" / "passwd"
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
         self.conn.login(username, password)
@@ -25,7 +64,7 @@ class Download:
         pass
 
     def get_passwd(self):
-        CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
+        CONFIG_FILE = self.config_file
         login_info = open(CONFIG_FILE, 'r')
 
         login_info = login_info.read().splitlines()
@@ -73,12 +112,10 @@ class Download:
             self,
             url,
             outf,
-            chunk_size=5 * 1024 * 1024,  # 每个 range 块大小（5MB）
-            max_workers=8,
-            quiet=False
+            chunk_size=10 * 1024 * 1024,  # 每个 range 块大小（10MB）
     ):
-        http = urllib3.PoolManager()
-        r = http.request(
+        http_conn = urllib3.PoolManager()
+        r = http_conn.request(
             "GET",
             url,
             preload_content=False
@@ -86,27 +123,12 @@ class Download:
 
         total_size = int(r.headers.get("Content-Length", 0))
 
-        # with open(outf, "wb") as f: # pre-allocate disk space
-        #     f.truncate(total_size)
+        if total_size > 1024*1024*300:
+            print('pre-allocating disk space ...')
 
-        lock = threading.Lock()
-
-        def download_range(start, end, pbar):
-            headers = {"Range": f"bytes={start}-{end}"}
-            r = http.request("GET", url, headers=headers, preload_content=False)
-            with open(outf, "wb") as f:
-                f.seek(start)
-                while True:
-                    data = r.read(1024 * 64)
-                    if not data:
-                        break
-                    f.write(data)
-                    with lock:
-                        pbar.update(len(data))
-                        pbar.refresh()
-            r.release_conn()
-
-        # 生成 ranges
+        with open(outf, "wb") as f: # pre-allocate disk space
+            f.truncate(total_size)
+        # exit()
         ranges = []
         for start in range(0, total_size, chunk_size):
             end = min(start + chunk_size - 1, total_size - 1)
@@ -118,18 +140,30 @@ class Download:
                 unit_scale=True,
                 unit_divisor=1024,
                 desc="Downloading",
-                disable=quiet,
                 smoothing=0.1,
-                mininterval=0.1
-        ) as pbar, ThreadPoolExecutor(max_workers=max_workers) as executor:
+        ) as pbar:
+            params_list = []
+            for start, end in ranges:
+                params = start, end, pbar,r,url,outf,http_conn
+                params_list.append(params)
+                # self.download_range(params)
+            max_workers = min(8, len(params_list))
+            MULTIPROCESS(self.download_range,params_list).run(process=max_workers,process_or_thread='t')
 
-            futures = [
-                executor.submit(download_range, s, e, pbar)
-                for s, e in ranges
-            ]
 
-            for f in as_completed(futures):
-                f.result()
+    def download_range(self,params):
+        start, end, pbar, r, url, outf, http_conn = params
+        headers = {"Range": f"bytes={start}-{end}"}
+        r = http_conn.request("GET", url, headers=headers, preload_content=False)
+        with open(outf, "r+b") as f:
+            f.seek(start)
+            while True:
+                data = r.read(1024 * 64)
+                if not data:
+                    break
+                f.write(data)
+                pbar.update(len(data))
+        r.release_conn()
 
     def tree(self, remote_path):
         dir_info_dict = self.conn.list(remote_path)
@@ -201,9 +235,14 @@ def main():
         default="./",
         help="Local path (default: current directory)"
     )
+    parser.add_argument(
+        "-c",
+        default=None,
+        help='config file path, located at ~/.config/cloudreve/'
+    )
 
     args = parser.parse_args()
-    Download().download(args.remote_path, args.local_path)
+    Download(config_file=args.c).download(remote_path=args.remote_path, outdir=args.local_path)
     pass
 
 if __name__ == '__main__':

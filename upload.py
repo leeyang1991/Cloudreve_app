@@ -306,8 +306,12 @@ class Utils_cloudreve:
 
 class Upload:
 
-    def __init__(self,multi_task=None):
-        self.BASE_URL, self.username, self.password = self.get_passwd()
+    def __init__(self,multi_task=None,config_file=None):
+        if config_file is not None:
+            self.config_file = Path.home() / ".config" / "cloudreve" / config_file
+        else:
+            self.config_file = Path.home() / ".config" / "cloudreve" / "passwd"
+        self.BASE_URL, self.username, self.password = self.get_passwd(self.config_file)
         self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
         self.conn.login(self.username, self.password)
         print('connected to', self.BASE_URL)
@@ -320,8 +324,8 @@ class Upload:
         self.conn = my_CloudreveV4(self.BASE_URL)
         self.conn.login(self.username, self.password)
 
-    def get_passwd(self):
-        CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
+    def get_passwd(self,CONFIG_FILE):
+        # CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
         login_info = open(CONFIG_FILE, 'r')
 
         login_info = login_info.read().splitlines()
@@ -526,10 +530,10 @@ def tar_first_level(src_dir: Path, dst_dir: Path = None):
         with tarfile.open(tar_path, mode="w") as tf:
             tf.add(p, arcname=p.name)
 
-def upload(*path_list, iszip=True, overwrite=True, multi_task=None, zip_each=False):
+def upload(*path_list, iszip=True, overwrite=True, multi_task=None, zip_each=False,config_file=None):
     total_len = len(path_list)
     flag = 0
-    Upload_obj = Upload(multi_task)
+    Upload_obj = Upload(multi_task=multi_task,config_file=config_file)
 
     for path in path_list:
         if '*' in path or '?' in path:
@@ -579,13 +583,16 @@ def main():
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
     parser.add_argument('--zip-each', action='store_true', help='tar each file in the folder respectively')
+    parser.add_argument('-c', default=None, help='config file path, located at ~/.config/cloudreve/')
     args = parser.parse_args()
 
     upload(*args.path,
            iszip=args.nozip,
            overwrite=args.no_overwrite,
            multi_task=args.multi,
-           zip_each=args.zip_each)
+           zip_each=args.zip_each,
+           config_file=args.c
+           )
 
 
 if __name__ == '__main__':

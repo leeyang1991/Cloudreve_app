@@ -2,14 +2,20 @@ from cloudreve import CloudreveV4
 from pathlib import Path
 import os
 import certifi
+import argparse
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
 
 class Prune:
 
-    def __init__(self):
+    def __init__(self,config_file=None):
         self.root_dir = '/_Transfer'
+        if config_file is not None:
+            self.config_file = Path.home() / ".config" / "cloudreve" / config_file
+        else:
+            self.config_file = Path.home() / ".config" / "cloudreve" / "passwd"
 
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
@@ -18,7 +24,7 @@ class Prune:
         pass
 
     def get_passwd(self):
-        CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
+        CONFIG_FILE = self.config_file
         login_info = open(CONFIG_FILE, 'r')
 
         login_info = login_info.read().splitlines()
@@ -90,7 +96,11 @@ class Prune:
             return True
 
 def main():
-    P = Prune()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', default=None, help='config file path, located at ~/.config/cloudreve/')
+    args = parser.parse_args()
+
+    P = Prune(config_file=args.c)
     flist = P.get_dir_files(P.root_dir)
     for fpath in flist:
         print('deleting',fpath)
