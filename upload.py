@@ -1,3 +1,4 @@
+import shutil
 import time
 
 from cloudreve import CloudreveV4
@@ -311,6 +312,20 @@ class Upload:
             self.config_file = Path.home() / ".config" / "cloudreve" / config_file
         else:
             self.config_file = Path.home() / ".config" / "cloudreve" / "passwd"
+        if not os.path.isfile(self.config_file):
+            # list files in Path.home() / ".config" / "cloudreve"
+            config_file_list = sorted(os.listdir(Path.home() / ".config" / "cloudreve"))
+            if len(config_file_list) == 0:
+                print('not any config file found')
+                print(f'please create a config file in the {Path.home() / ".config" / "cloudreve"}')
+                exit()
+            else:
+                print(f'config file not found: {self.config_file}')
+                print('please use -c to select a config file')
+
+                print('config options:',' | '.join(config_file_list))
+                exit()
+            pass
         self.BASE_URL, self.username, self.password = self.get_passwd(self.config_file)
         self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
         self.conn.login(self.username, self.password)
@@ -525,12 +540,15 @@ def tar_first_level(src_dir: Path, dst_dir: Path = None):
     for p in src_dir.iterdir():
         f_num += 1
     for p in tqdm(src_dir.iterdir(),total=f_num,desc='tar each file'):
+        if not os.path.isdir(p):
+            shutil.copy(p,dst_dir / p.name)
+            continue
         tar_path = dst_dir / (p.name + ".tar")
 
         with tarfile.open(tar_path, mode="w") as tf:
             tf.add(p, arcname=p.name)
 
-def upload(*path_list, iszip=True, overwrite=True, multi_task=None, zip_each=False,config_file=None):
+def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=False,config_file=None):
     total_len = len(path_list)
     flag = 0
     Upload_obj = Upload(multi_task=multi_task,config_file=config_file)
@@ -562,8 +580,8 @@ def upload(*path_list, iszip=True, overwrite=True, multi_task=None, zip_each=Fal
 
         else:
             if os.path.isdir(path):
-                if zip_each:
-                    zip_first_level_dir = path.parent / (str(path.name) + '_zip_each')
+                if tar_each:
+                    zip_first_level_dir = path.parent / (str(path.name) + '_tar_each')
                     tar_first_level(path,zip_first_level_dir)
                     zip_first_level_dir = str(zip_first_level_dir)
                     Upload_obj.upload_dir(zip_first_level_dir, overwrite=overwrite)
@@ -582,15 +600,16 @@ def main():
     parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 50MB, zip will be skipped')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
-    parser.add_argument('--zip-each', action='store_true', help='tar each file in the folder respectively')
-    parser.add_argument('-c', default=None, help='config file path, located at ~/.config/cloudreve/')
+    parser.add_argument('--tar-each', action='store_true', help='tar each file in the folder respectively')
+    config_dir = Path.home() / ".config" / "cloudreve"
+    parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
     args = parser.parse_args()
 
     upload(*args.path,
            iszip=args.nozip,
            overwrite=args.no_overwrite,
            multi_task=args.multi,
-           zip_each=args.zip_each,
+           tar_each=args.tar_each,
            config_file=args.c
            )
 

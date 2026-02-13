@@ -57,6 +57,20 @@ class Download:
             self.config_file = Path.home() / ".config" / "cloudreve" / config_file
         else:
             self.config_file = Path.home() / ".config" / "cloudreve" / "passwd"
+        if not os.path.isfile(self.config_file):
+            # list files in Path.home() / ".config" / "cloudreve"
+            config_file_list = sorted(os.listdir(Path.home() / ".config" / "cloudreve"))
+            if len(config_file_list) == 0:
+                print('not any config file found')
+                print(f'please create a config file in the {Path.home() / ".config" / "cloudreve"}')
+                exit()
+            else:
+                print(f'config file not found: {self.config_file}')
+                print('please use -c to select a config file')
+
+                print('config options:',' | '.join(config_file_list))
+                exit()
+            pass
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
         self.conn.login(username, password)
