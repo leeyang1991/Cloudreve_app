@@ -13,6 +13,7 @@ from multiprocessing.pool import ThreadPool as TPool
 import copyreg
 import types
 
+import sys
 
 stop_event = threading.Event()
 
@@ -63,13 +64,13 @@ class Download:
             if len(config_file_list) == 0:
                 print('not any config file found')
                 print(f'please create a config file in the {Path.home() / ".config" / "cloudreve"}')
-                exit()
+                sys.exit(0)
             else:
                 print(f'config file not found: {self.config_file}')
                 print('please use -c to select a config file')
 
                 print('config options:',' | '.join(config_file_list))
-                exit()
+                sys.exit(0)
             pass
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
@@ -142,7 +143,7 @@ class Download:
 
         with open(outf, "wb") as f: # pre-allocate disk space
             f.truncate(total_size)
-        # exit()
+
         ranges = []
         for start in range(0, total_size, chunk_size):
             end = min(start + chunk_size - 1, total_size - 1)
@@ -233,7 +234,14 @@ class Download:
             self.download_f_parallel(url, outf)
             # self.download_f1(url, outf)
 
+def download(remote_path,outdir=None,config_file=None):
+    Download(config_file=config_file).download(remote_path=remote_path, outdir=outdir)
+
+    pass
+
 def main():
+    config_dir = Path.home() / ".config" / "cloudreve"
+
     parser = argparse.ArgumentParser(
         prog="download",
         description="Download file from Cloudreve"
@@ -241,6 +249,7 @@ def main():
 
     parser.add_argument(
         "remote_path",
+         nargs = '*',
         help="Remote file path in Cloudreve (e.g. xx.mp3)"
     )
     parser.add_argument(
@@ -249,14 +258,27 @@ def main():
         default="./",
         help="Local path (default: current directory)"
     )
-    parser.add_argument(
-        "-c",
-        default=None,
-        help='config file path, located at ~/.config/cloudreve/'
-    )
+    parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
+
+    parser.add_argument('-ls', action='store_true', help=f'list config files in {config_dir}')
 
     args = parser.parse_args()
-    Download(config_file=args.c).download(remote_path=args.remote_path, outdir=args.local_path)
+
+    if args.ls:
+        config_file_list = sorted(os.listdir(Path.home() / ".config" / "cloudreve"))
+        print('config options:', ' | '.join(config_file_list))
+        sys.exit(0)
+
+
+    args = parser.parse_args()
+
+    if len(args.remote_path) == 0:
+        parser.print_help()
+        sys.exit(0)
+    else:
+        remote_path = args.remote_path[0]
+
+    download(remote_path=remote_path, outdir=args.local_path, config_file=args.c)
     pass
 
 if __name__ == '__main__':

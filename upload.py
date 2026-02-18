@@ -18,6 +18,8 @@ import math
 import zipfile
 import tarfile
 
+import sys
+
 # from pprint import pprint
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -318,13 +320,13 @@ class Upload:
             if len(config_file_list) == 0:
                 print('not any config file found')
                 print(f'please create a config file in the {Path.home() / ".config" / "cloudreve"}')
-                exit()
+                sys.exit(0)
             else:
                 print(f'config file not found: {self.config_file}')
                 print('please use -c to select a config file')
 
                 print('config options:',' | '.join(config_file_list))
-                exit()
+                sys.exit(0)
             pass
         self.BASE_URL, self.username, self.password = self.get_passwd(self.config_file)
         self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
@@ -548,10 +550,14 @@ def tar_first_level(src_dir: Path, dst_dir: Path = None):
         with tarfile.open(tar_path, mode="w") as tf:
             tf.add(p, arcname=p.name)
 
-def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=False,config_file=None):
+def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=False,config_file=None,remote_folder=None):
     total_len = len(path_list)
     flag = 0
     Upload_obj = Upload(multi_task=multi_task,config_file=config_file)
+
+    if remote_folder is not None:
+        Upload_obj.root_dir = Upload_obj.root_dir + '/' + remote_folder
+        Upload_obj.conn.create_dir(Upload_obj.root_dir)
 
     for path in path_list:
         if '*' in path or '?' in path:
@@ -572,9 +578,14 @@ def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=Fal
                     dst = path
                 else:
                     dst = zip_file(path)
+                    is_compressed = is_compressed_by_suffix(path)
+                    if is_compressed:
+                        del_flag = False
             else:
                 raise Exception(f'{path} not exist')
             Upload_obj.upload_f(dst, overwrite=overwrite,desc_prefix=desc_prefix)
+            # print(del_flag)
+            # sys.exit(0)
             if del_flag:
                 os.remove(dst)
 
@@ -595,22 +606,38 @@ def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=Fal
 
 
 def main():
+
+    config_dir = Path.home() / ".config" / "cloudreve"
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('path', nargs='+', help='Local file/folder path, multiple files/folders')
+    parser.add_argument('path', nargs='*', help='Local file/folder path, multiple files/folders')
     parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 50MB, zip will be skipped')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
     parser.add_argument('--tar-each', action='store_true', help='tar each file in the folder respectively')
-    config_dir = Path.home() / ".config" / "cloudreve"
+
     parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
+    parser.add_argument('-ls', action='store_true', help=f'list config files in {config_dir}')
+    parser.add_argument('-folder', default=None, help=f'remote folder to upload, default is "_Transfer" directory')
+
     args = parser.parse_args()
+
+    if args.ls:
+        config_file_list = sorted(os.listdir(Path.home() / ".config" / "cloudreve"))
+        print('config options:', ' | '.join(config_file_list))
+        sys.exit(0)
+
+    if len(args.path) == 0:
+        parser.print_help()
+        sys.exit(0)
 
     upload(*args.path,
            iszip=args.nozip,
            overwrite=args.no_overwrite,
            multi_task=args.multi,
            tar_each=args.tar_each,
-           config_file=args.c
+           config_file=args.c,
+           remote_folder=args.folder
            )
 
 

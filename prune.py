@@ -4,6 +4,8 @@ import os
 import certifi
 import argparse
 
+import sys
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
@@ -22,13 +24,13 @@ class Prune:
             if len(config_file_list) == 0:
                 print('not any config file found')
                 print(f'please create a config file in the {Path.home() / ".config" / "cloudreve"}')
-                exit()
+                sys.exit(0)
             else:
                 print(f'config file not found: {self.config_file}')
                 print('please use -c to select a config file')
 
                 print('config options:',' | '.join(config_file_list))
-                exit()
+                sys.exit(0)
             pass
         BASE_URL, username, password = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
