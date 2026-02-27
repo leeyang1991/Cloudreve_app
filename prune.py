@@ -31,10 +31,12 @@ class Prune:
 
                 print('config options:',' | '.join(config_file_list))
                 sys.exit(0)
-            pass
-        BASE_URL, username, password = self.get_passwd()
+        BASE_URL, username, password, token = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
-        self.conn.login(username, password)
+        if token is None:
+            self.conn.login(username, password)
+        else:
+            self.conn.session.headers.update({'Authorization': 'Bearer ' + token})
         print('connected to', BASE_URL)
         pass
 
@@ -46,8 +48,11 @@ class Prune:
         BASE_URL = login_info[0]
         username = login_info[1]
         password = login_info[2]
-
-        return BASE_URL, username, password
+        if len(login_info) > 3:
+            token = login_info[3]
+        else:
+            token = None
+        return BASE_URL, username, password, token
 
     def get_url(self, remote_fname):
         data = self.conn.get_info(remote_fname)

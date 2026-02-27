@@ -6,7 +6,6 @@ from pprint import pprint
 from pathlib import Path
 import os
 import certifi
-import threading
 
 import multiprocessing
 from multiprocessing.pool import ThreadPool as TPool
@@ -14,8 +13,6 @@ import copyreg
 import types
 
 import sys
-
-stop_event = threading.Event()
 
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -71,11 +68,15 @@ class Download:
 
                 print('config options:',' | '.join(config_file_list))
                 sys.exit(0)
-            pass
-        BASE_URL, username, password = self.get_passwd()
+
+        BASE_URL, username, password, token = self.get_passwd()
         self.conn = CloudreveV4(BASE_URL)
-        self.conn.login(username, password)
+        if token is None:
+            self.conn.login(username, password)
+        else:
+            self.conn.session.headers.update({'Authorization': 'Bearer ' + token})
         print('connected to',BASE_URL)
+
         pass
 
     def get_passwd(self):
@@ -86,9 +87,11 @@ class Download:
         BASE_URL = login_info[0]
         username = login_info[1]
         password = login_info[2]
-
-        return BASE_URL, username, password
-
+        if len(login_info) > 3:
+            token = login_info[3]
+        else:
+            token = None
+        return BASE_URL, username, password, token
 
     def get_url(self, remote_fname):
         data = self.conn.get_info(remote_fname)
@@ -252,12 +255,7 @@ def main():
          nargs = '*',
         help="Remote file path in Cloudreve (e.g. xx.mp3)"
     )
-    parser.add_argument(
-        "local_path",
-        nargs="?",
-        default="./",
-        help="Local path (default: current directory)"
-    )
+    parser.add_argument('-folder', default=None, help=f'local folder to save downloaded files, default is current directory')
     parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
 
     parser.add_argument('-ls', action='store_true', help=f'list config files in {config_dir}')
@@ -269,7 +267,6 @@ def main():
         print('config options:', ' | '.join(config_file_list))
         sys.exit(0)
 
-
     args = parser.parse_args()
 
     if len(args.remote_path) == 0:
@@ -277,8 +274,7 @@ def main():
         sys.exit(0)
     else:
         remote_path = args.remote_path[0]
-
-    download(remote_path=remote_path, outdir=args.local_path, config_file=args.c)
+    download(remote_path=remote_path, outdir=args.folder, config_file=args.c)
     pass
 
 if __name__ == '__main__':

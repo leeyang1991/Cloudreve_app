@@ -19,7 +19,6 @@ import zipfile
 import tarfile
 
 import sys
-
 # from pprint import pprint
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -327,10 +326,13 @@ class Upload:
 
                 print('config options:',' | '.join(config_file_list))
                 sys.exit(0)
-            pass
-        self.BASE_URL, self.username, self.password = self.get_passwd(self.config_file)
+
+        self.BASE_URL, self.username, self.password,self.token = self.get_passwd(self.config_file)
         self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
-        self.conn.login(self.username, self.password)
+        if self.token is not None:
+            self.conn.session.headers.update({'Authorization': 'Bearer ' + self.token})
+        else:
+            self.conn.login(self.username, self.password)
         print('connected to', self.BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
         self.root_dir = '/_Transfer'
@@ -338,8 +340,11 @@ class Upload:
         pass
 
     def refresh_conn(self):
-        self.conn = my_CloudreveV4(self.BASE_URL)
-        self.conn.login(self.username, self.password)
+
+        if self.token is None:
+            self.conn.login(self.username, self.password)
+        else:
+            self.conn.session.headers.update({'Authorization': 'Bearer ' + self.token})
 
     def get_passwd(self,CONFIG_FILE):
         # CONFIG_FILE = Path.home() / ".config" / "cloudreve" / "passwd"
@@ -350,7 +355,11 @@ class Upload:
         username = login_info[1]
         password = login_info[2]
 
-        return BASE_URL, username, password
+        if len(login_info) > 3:
+            token = login_info[3]
+        else:
+            token = None
+        return BASE_URL, username, password, token
 
     def upload_f(self, local_f, remote_f=None, overwrite=True, **kwargs):
 
