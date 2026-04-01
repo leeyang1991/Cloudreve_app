@@ -149,7 +149,7 @@ class Download:
 
         total_size = int(r.headers.get("Content-Length", 0))
 
-        if total_size > 1024*1024*300:
+        if total_size > 1024*1024*1024:
             print('pre-allocating disk space ...')
 
         with open(outf, "wb") as f: # pre-allocate disk space
@@ -280,7 +280,8 @@ def main():
     parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
 
     parser.add_argument('-ls', action='store_true', help=f'list config files in {config_dir}')
-
+    # todo: add overwrite option
+    parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     args = parser.parse_args()
 
     if args.ls:
