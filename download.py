@@ -131,6 +131,7 @@ class Download:
             url,
             outf,
             chunk_size=10 * 1024 * 1024,  # 每个 range 块大小（10MB）
+            **kwargs
     ):
         http_conn = urllib3.PoolManager()
         r = http_conn.request(
@@ -138,6 +139,13 @@ class Download:
             url,
             preload_content=False
         )
+        outf_Path_obj = Path(outf)
+        fname = outf_Path_obj.name
+
+        if 'desc_prefix' in kwargs:
+            desc_prefix = kwargs['desc_prefix'] + ' '
+        else:
+            desc_prefix = ''
 
         total_size = int(r.headers.get("Content-Length", 0))
 
@@ -157,7 +165,7 @@ class Download:
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
-                desc="Downloading",
+                desc=f"{desc_prefix}Downloading {fname}",
                 smoothing=0.1,
         ) as pbar:
             params_list = []
@@ -228,14 +236,27 @@ class Download:
             path_list = [remote_path]
         else:
             path_list = self.tree(remote_path)
-        for path_remote in path_list:
-            path_local = path_remote.replace(self.root_dir+'/', '')
+
+        if len(path_list) == 1:
+            path_remote = path_list[0]
+            path_local = path_remote.replace(self.root_dir + '/', '')
             outf = outdir / path_local
             parent_dir = outf.parent
             parent_dir.mkdir(parents=True, exist_ok=True)
             url = self.get_url(path_remote)
             self.download_f_parallel(url, outf)
-            # self.download_f1(url, outf)
+        else:
+            total_len = len(path_list)
+            flag = 0
+            for path_remote in path_list:
+                flag += 1
+                path_local = path_remote.replace(self.root_dir+'/', '')
+                outf = outdir / path_local
+                parent_dir = outf.parent
+                parent_dir.mkdir(parents=True, exist_ok=True)
+                url = self.get_url(path_remote)
+                desc_prefix = f'({flag}/{total_len})'
+                self.download_f_parallel(url, outf, desc_prefix=desc_prefix)
 
 def download(remote_path,outdir=None,config_file=None):
     Download(config_file=config_file).download(remote_path=remote_path, outdir=outdir)
