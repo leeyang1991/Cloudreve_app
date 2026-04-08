@@ -1,3 +1,5 @@
+from os.path import isfile
+
 from cloudreve import CloudreveV4
 import urllib3
 import argparse
@@ -131,21 +133,26 @@ class Download:
             url,
             outf,
             chunk_size=10 * 1024 * 1024,  # 每个 range 块大小（10MB）
+            overwrite=True,
             **kwargs
     ):
+        outf_Path_obj = Path(outf)
+        fname = outf_Path_obj.name
+        if 'desc_prefix' in kwargs:
+            desc_prefix = kwargs['desc_prefix'] + ' '
+        else:
+            desc_prefix = ''
+
+        if not overwrite:
+            if isfile(outf) and os.path.getsize(outf) > 0:
+                print(f'{desc_prefix}already downloaded: {fname}')
+                return
         http_conn = urllib3.PoolManager()
         r = http_conn.request(
             "GET",
             url,
             preload_content=False
         )
-        outf_Path_obj = Path(outf)
-        fname = outf_Path_obj.name
-
-        if 'desc_prefix' in kwargs:
-            desc_prefix = kwargs['desc_prefix'] + ' '
-        else:
-            desc_prefix = ''
 
         total_size = int(r.headers.get("Content-Length", 0))
 
@@ -159,13 +166,16 @@ class Download:
         for start in range(0, total_size, chunk_size):
             end = min(start + chunk_size - 1, total_size - 1)
             ranges.append((start, end))
-
+        if len(fname) > 36:
+            desc_name = fname[:36] + '...'
+        else:
+            desc_name = fname
         with tqdm(
                 total=total_size,
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
-                desc=f"{desc_prefix}Downloading {fname}",
+                desc=f"{desc_prefix}Downloading {desc_name}",
                 smoothing=0.1,
         ) as pbar:
             params_list = []
@@ -192,7 +202,7 @@ class Download:
         r.release_conn()
 
     def tree(self, remote_path):
-        dir_info_dict = self.conn.list(remote_path)
+        dir_info_dict = self.conn.list(remote_path,page_size=10000)
         files_info_dict = dir_info_dict['files']
         path_list = []
         for dict_i in files_info_dict:
@@ -227,7 +237,7 @@ class Download:
         elif f_type == 1: return False
         else: raise Exception('unknown file type')
 
-    def download(self, remote_path, outdir:str=None):
+    def download(self, remote_path, outdir:str=None,overwrite:bool=True):
         if outdir == None:
             outdir = os.getcwd()
         outdir = Path(outdir)
@@ -244,7 +254,7 @@ class Download:
             parent_dir = outf.parent
             parent_dir.mkdir(parents=True, exist_ok=True)
             url = self.get_url(path_remote)
-            self.download_f_parallel(url, outf)
+            self.download_f_parallel(url, outf,overwrite=overwrite)
         else:
             total_len = len(path_list)
             flag = 0
@@ -256,10 +266,11 @@ class Download:
                 parent_dir.mkdir(parents=True, exist_ok=True)
                 url = self.get_url(path_remote)
                 desc_prefix = f'({flag}/{total_len})'
-                self.download_f_parallel(url, outf, desc_prefix=desc_prefix)
+                self.download_f_parallel(url, outf, desc_prefix=desc_prefix,overwrite=overwrite)
 
-def download(remote_path,outdir=None,config_file=None):
-    Download(config_file=config_file).download(remote_path=remote_path, outdir=outdir)
+def download(remote_path,outdir=None,config_file=None,no_overwrite=False):
+    overwrite = not no_overwrite
+    Download(config_file=config_file).download(remote_path=remote_path, outdir=outdir,overwrite=overwrite)
 
     pass
 
@@ -280,8 +291,7 @@ def main():
     parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
 
     parser.add_argument('-ls', action='store_true', help=f'list config files in {config_dir}')
-    # todo: add overwrite option
-    parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
+    parser.add_argument('--no-overwrite', action='store_true', help='disable overwrite existing file')
     args = parser.parse_args()
 
     if args.ls:
@@ -296,8 +306,9 @@ def main():
         sys.exit(0)
     else:
         remote_path = args.remote_path[0]
-    download(remote_path=remote_path, outdir=args.folder, config_file=args.c)
+    download(remote_path=remote_path, outdir=args.folder, config_file=args.c,no_overwrite=args.no_overwrite)
     pass
 
 if __name__ == '__main__':
     main()
+    pass
