@@ -482,7 +482,7 @@ def zip_dir(src_dir: Path, dst: Path = None) -> Path:
         raise ValueError(f"{src_dir} is not a directory")
 
     if dst is None:
-        dst = src_dir.with_suffix(".zip")
+        dst = src_dir.with_suffix(src_dir.suffix + ".zip")
     else:
         dst = Path(dst).resolve()
 
@@ -582,7 +582,7 @@ def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=Fal
                 dst = zip_dir(path)
             elif os.path.isfile(path):
                 src_size = path.stat().st_size / 1024 / 1024
-                if src_size < 50:
+                if src_size < 1024:
                     del_flag = False
                     dst = path
                 else:
@@ -620,7 +620,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('path', nargs='*', help='Local file/folder path, multiple files/folders')
-    parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 50MB, zip will be skipped')
+    parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 1GB, zip will be skipped')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
     parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
     parser.add_argument('--tar-each', action='store_true', help='tar each file in the folder respectively')
