@@ -3,6 +3,8 @@ import time
 
 from cloudreve import CloudreveV4
 import argparse
+
+import datetime
 from tqdm import tqdm
 from pathlib import Path
 from mimetypes import guess_type
@@ -335,7 +337,9 @@ class Upload:
             self.conn.login(self.username, self.password)
         print('connected to', self.BASE_URL)
         self.Util = Utils_cloudreve(self.conn)
-        self.root_dir = '/_Transfer'
+        date = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=-4))).strftime('%Y-%m-%d')
+        self.root_dir = f'/_Transfer/{date}'
+        # self.root_dir = '/_Transfer'
         self.conn.create_dir(self.root_dir)
         pass
 

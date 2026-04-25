@@ -16,6 +16,8 @@ import types
 
 import sys
 
+import datetime
+import urllib
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -52,7 +54,9 @@ class MULTIPROCESS:
 class Download:
 
     def __init__(self, config_file=None):
-        self.root_dir = '/_Transfer'
+        date = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=-4))).strftime('%Y-%m-%d')
+        self.root_dir = f'/_Transfer/{date}'
+        # self.root_dir = '/_Transfer'
         if config_file is not None:
             self.config_file = Path.home() / ".config" / "cloudreve" / config_file
         else:
@@ -240,7 +244,9 @@ class Download:
     def download(self, remote_path, outdir:str=None,overwrite:bool=True):
         if outdir == None:
             outdir = os.getcwd()
-        outdir = Path(outdir)
+        date = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=-4))).strftime('%Y-%m-%d')
+        # self.root_dir = f'/_Transfer/{date}'
+        outdir = Path(outdir) / date
         remote_path = self.root_dir + '/' + remote_path
         if self.check_is_file(remote_path):
             path_list = [remote_path]
@@ -261,7 +267,8 @@ class Download:
             for path_remote in path_list:
                 flag += 1
                 path_local = path_remote.replace(self.root_dir+'/', '')
-                outf = outdir / path_local
+                decoded_str = urllib.parse.unquote(path_local)
+                outf = outdir / decoded_str
                 parent_dir = outf.parent
                 parent_dir.mkdir(parents=True, exist_ok=True)
                 url = self.get_url(path_remote)

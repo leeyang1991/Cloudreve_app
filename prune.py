@@ -6,6 +6,8 @@ import argparse
 
 import sys
 
+import datetime
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
@@ -13,7 +15,8 @@ os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 class Prune:
 
     def __init__(self,config_file=None):
-        self.root_dir = '/_Transfer'
+        date = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=-4))).strftime('%Y-%m-%d')
+        self.root_dir = f'/_Transfer/{date}'
         if config_file is not None:
             self.config_file = Path.home() / ".config" / "cloudreve" / config_file
         else:
