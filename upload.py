@@ -63,7 +63,7 @@ class my_CloudreveV4(CloudreveV4):
                  verify=True,
                  headers=None,
                  cloudreve_session=None,
-                 multi_task=None
+                 multi_task='True'
                  ):
         super().__init__(base_url, proxy=proxy,
                          verify=verify,
@@ -81,8 +81,6 @@ class my_CloudreveV4(CloudreveV4):
         local_file = Path(local_file_path)
         if not local_file.is_file():
             raise FileNotFoundError(f'{local_file_path} is not a file')
-        size = local_file.stat().st_size
-
 
         uri = self.revise_file_path(uri)
         dir = uri[:uri.rfind('/')]
@@ -104,18 +102,15 @@ class my_CloudreveV4(CloudreveV4):
                          })
         self.chunk_size = r['chunk_size']
 
-        if self.multi_task == None:
+        if self.multi_task == 'True':
             if size > self.chunk_size:
                 upload_func = self._upload_to_local_parallel
-                # print('parallel upload')
             else:
                 upload_func = self._upload_to_local
-        elif self.multi_task == True:
-            upload_func = self._upload_to_local_parallel
-        elif self.multi_task == False:
+        elif self.multi_task == 'False':
             upload_func = self._upload_to_local
         else:
-            raise 'multi_task should be True, False or None'
+            raise 'multi_task should be "True", "False" or "None"'
 
         if policy_type == 'remote' and r.get('upload_urls') and len(
                 r['upload_urls']) > 0:
@@ -223,7 +218,7 @@ class my_CloudreveV4(CloudreveV4):
                     break
 
             success_block_id_list = MULTIPROCESS(self.kernel_upload_block,params_list[:-1]).run(process=njob,process_or_thread='t')
-            time.sleep(0.5)
+            time.sleep(1)
 
             for block_id_i in success_block_id_list:
                 success_dict[block_id_i] = True
@@ -310,7 +305,7 @@ class Utils_cloudreve:
 
 class Upload:
 
-    def __init__(self,multi_task=None,config_file=None):
+    def __init__(self,multi_task='True',config_file=None):
         if config_file is not None:
             self.config_file = Path.home() / ".config" / "cloudreve" / config_file
         else:
@@ -563,7 +558,7 @@ def tar_first_level(src_dir: Path, dst_dir: Path = None):
         with tarfile.open(tar_path, mode="w") as tf:
             tf.add(p, arcname=p.name)
 
-def upload(*path_list, iszip=True, overwrite=True, multi_task=None, tar_each=False,config_file=None,remote_folder=None):
+def upload(*path_list, iszip=True, overwrite=True, multi_task='True', tar_each=False,config_file=None,remote_folder=None):
     total_len = len(path_list)
     flag = 0
     Upload_obj = Upload(multi_task=multi_task,config_file=config_file)
@@ -626,7 +621,7 @@ def main():
     parser.add_argument('path', nargs='*', help='Local file/folder path, multiple files/folders')
     parser.add_argument('--nozip', action='store_false', help='disable zip before uploading. If file size is less than 1GB, zip will be skipped')
     parser.add_argument('--no-overwrite', action='store_false', help='disable overwrite existing file')
-    parser.add_argument('--multi',default=None, help='specific parallel upload (True, False, None)')
+    parser.add_argument('--multi',default='True', help='specific parallel upload (True, False)')
     parser.add_argument('--tar-each', action='store_true', help='tar each file in the folder respectively')
 
     parser.add_argument('-c', default=None, help=f'config file path, located at {config_dir}, default is "passwd"')
