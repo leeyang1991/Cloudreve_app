@@ -21,7 +21,10 @@ import zipfile
 import tarfile
 
 import sys
-# from pprint import pprint
+
+import socket
+from six.moves import zip_longest
+from timeit import default_timer as timer
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -325,6 +328,10 @@ class Upload:
                 sys.exit(0)
 
         self.BASE_URL, self.username, self.password,self.token = self.get_passwd(self.config_file)
+        # host = self.BASE_URL.replace('http://', '').replace('https://', '').split(':')[0]
+        resp_time_ms = self.ping_host()
+        if resp_time_ms < 5:
+            multi_task = 'False'
         self.conn = my_CloudreveV4(self.BASE_URL,multi_task=multi_task)
         if self.token is not None:
             self.conn.session.headers.update({'Authorization': 'Bearer ' + self.token})
@@ -337,6 +344,21 @@ class Upload:
         # self.root_dir = '/_Transfer'
         self.conn.create_dir(self.root_dir)
         pass
+
+    def ping_host(self):
+        host = self.BASE_URL.replace('http://', '').replace('https://', '').split(':')[0]
+        try:
+            port = int(self.BASE_URL.replace('http://', '').replace('https://', '').split(':')[-1])
+        except:
+            if 'http://' in self.BASE_URL:
+                port = 80
+            elif 'https://' in self.BASE_URL:
+                port = 443
+            else:
+                raise Exception('invalid url',self.BASE_URL)
+        ms_time = Ping(host,port=port, timeout=1).ping()
+        return ms_time
+
 
     def refresh_conn(self):
 
@@ -438,6 +460,63 @@ class Upload:
                 self.upload_f(local_f, remote_f, overwrite, desc_prefix=desc_prefix)
                 self.refresh_conn()
 
+
+class Socket(object):
+    def __init__(self, family, type_, timeout):
+        s = socket.socket(family, type_)
+        s.settimeout(timeout)
+        self._s = s
+
+    def connect(self, host, port=80):
+        self._s.connect((host, int(port)))
+
+    def shutdown(self):
+        self._s.shutdown(socket.SHUT_RD)
+
+    def close(self):
+        self._s.close()
+
+
+class Timer(object):
+    def __init__(self):
+        self._start = 0
+        self._stop = 0
+
+    def start(self):
+        self._start = timer()
+
+    def stop(self):
+        self._stop = timer()
+
+    def cost(self, funcs, args):
+        self.start()
+        for func, arg in zip_longest(funcs, args):
+            if arg:
+                func(*arg)
+            else:
+                func()
+
+        self.stop()
+        return self._stop - self._start
+
+
+class Ping:
+    def __init__(self, host, port=80, timeout=1):
+        self.timer = Timer()
+        self._host = host
+        self._port = port
+        self._timeout = timeout
+
+    def _create_socket(self, family, type_):
+        return Socket(family, type_, self._timeout)
+
+    def ping(self):
+        s = self._create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        cost_time = self.timer.cost(
+            (s.connect, s.shutdown),
+            ((self._host, self._port), None))
+        s_runtime = 1000 * (cost_time)
+        return s_runtime
 
 def is_compressed_by_suffix(p: Path) -> bool:
     COMPRESSED_SUFFIXES = {
